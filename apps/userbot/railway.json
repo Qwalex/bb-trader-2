@@ -1,0 +1,15 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "docker/userbot.Dockerfile",
+    "watchPatterns": [
+      "apps/userbot/**"
+    ]
+  },
+  "deploy": {
+    "startCommand": "python -m bb_userbot.main",
+    "numReplicas": 1,
+    "restartPolicyType": "ON_FAILURE"
+  }
+}

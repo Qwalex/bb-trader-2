@@ -1,0 +1,63 @@
+import { getPrisma, disconnectPrisma } from '@repo/shared-prisma';
+import { getQueueClient, disconnectQueueClient } from '@repo/shared-queue';
+import { QUEUE_NAMES } from '@repo/shared-ts';
+import { loadConfig } from './config.js';
+import { createLogger } from './logger.js';
+import { OpenRouterClient } from './openrouter.js';
+import { IngestWorker } from './ingest-worker.js';
+
+async function main(): Promise<void> {
+  const config = loadConfig();
+  const logger = createLogger(config.LOG_LEVEL);
+
+  logger.info({ model: config.OPENROUTER_MODEL }, 'classifier.start');
+
+  const prisma = getPrisma();
+  const queue = await getQueueClient({
+    connectionString: config.DATABASE_URL,
+    application_name: 'bb-classifier',
+  });
+
+  // pg-boss v10 требует явного createQueue
+  await queue.createQueue(QUEUE_NAMES.executeSignal);
+
+  const openrouter = new OpenRouterClient({
+    apiKey: config.OPENROUTER_API_KEY,
+    model: config.OPENROUTER_MODEL,
+    timeoutMs: config.OPENROUTER_HTTP_TIMEOUT_MS,
+    logger,
+  });
+
+  const worker = new IngestWorker({
+    prisma,
+    queue,
+    openrouter,
+    logger,
+    pollIntervalMs: config.CLASSIFIER_POLL_INTERVAL_MS,
+    batchSize: config.CLASSIFIER_BATCH_SIZE,
+  });
+
+  const shutdown = async (signal: string) => {
+    logger.info({ signal }, 'classifier.shutdown.begin');
+    worker.stop();
+    await disconnectQueueClient();
+    await disconnectPrisma();
+    logger.info('classifier.shutdown.done');
+    process.exit(0);
+  };
+
+  process.on('SIGTERM', () => {
+    void shutdown('SIGTERM');
+  });
+  process.on('SIGINT', () => {
+    void shutdown('SIGINT');
+  });
+
+  await worker.run();
+}
+
+main().catch((error) => {
+  // eslint-disable-next-line no-console
+  console.error('classifier fatal error', error);
+  process.exit(1);
+});

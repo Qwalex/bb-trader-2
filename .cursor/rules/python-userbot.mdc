@@ -1,0 +1,35 @@
+---
+description: Правила для apps/userbot (Python + Telethon) — async-only, только ingest, никакой торговой логики.
+globs: apps/userbot/**
+alwaysApply: false
+---
+
+# Userbot (Python + Telethon)
+
+Единственная ответственность — MTProto-приём и ingest в БД.
+
+## Стек
+
+- Python 3.12+, `uv` для зависимостей.
+- `Telethon` (MTProto), `asyncpg` или `SQLAlchemy[async]` для Postgres.
+- Один процесс + одна event loop + мультиплекс N `TelegramClient`'ов (по одному на `User`).
+
+## Что делает
+
+- QR-login по `UserbotCommand{ type: 'login_qr' }`, результат кладёт в `UserbotCommand.resultJson`.
+- Подписка/отписка от каналов (читает `UserbotChannel`).
+- Приём новых сообщений → `INSERT` в `ingest_events` с идемпотентностью по `(userId, chatId, messageId)`.
+- `publish('classify.message', { ingestEventId, userId })` через pg-boss.
+
+## Что НЕ делает
+
+- Не вызывает OpenRouter, Bybit, Telegraf.
+- Не парсит сигналы, не считает хэши, не фильтрует по паттернам — это `classifier`.
+- Не держит в памяти историю сообщений — всё сразу в БД.
+
+## Стиль
+
+- Только `async/await`. `requests`/`psycopg2`-sync запрещены.
+- `TelegramClient` восстанавливается из `UserbotSession.sessionString` (расшифровка через `APP_ENCRYPTION_KEY`).
+- Ошибки ловим на уровне конкретной сессии, не падаем всем процессом.
+- Логи в `app_logs`, `category='userbot'`.

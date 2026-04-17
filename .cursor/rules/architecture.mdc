@@ -1,0 +1,32 @@
+---
+description: Границы 5 сервисов; куда класть код, что через очереди и БД, что нельзя тянуть напрямую; bb-trader — readonly reference.
+alwaysApply: true
+---
+
+# Архитектура: 5 сервисов
+
+Новый проект живёт в **корне workspace**. Папка `bb-trader/` — **readonly reference** (старый прод), её не редактируем, не коммитим в новый репо (она в `.gitignore`). Смотреть туда можно только чтобы понять, как работала логика раньше.
+
+План: `bb-trader_multi-service_rewrite`.
+
+## Сервисы
+
+- `apps/userbot` (Python + Telethon) — только MTProto: приём сообщений, QR-login, запись в `ingest_events`. Без торговой/OpenRouter-логики.
+- `apps/classifier` (Node) — consumer `classify.message`: OpenRouter-парсинг, запись в `signal_drafts`.
+- `apps/trader` (Node) — consumer `execute.signal`: fanout по кабинетам пользователя + исполнение на Bybit ключами кабинета. Декомпозиция на `Order/Position/Pnl/Reconcile`.
+- `apps/api` (NestJS, slim) — REST для web + Telegraf-бот подтверждений. Без Telegram-userbot / Bybit / OpenRouter inline.
+- `apps/web` (Next.js) — UI, Telegram Login, селектор кабинета.
+
+## Общие пакеты
+
+- `packages/shared-ts` — DTO, zod-схемы job-payload, типы.
+- `packages/shared-prisma` — единый `schema.prisma` + клиент.
+- `packages/shared-queue` — обёртка pg-boss.
+
+## Жёсткие запреты
+
+- Не редактировать и не коммитить `bb-trader/` — только читать.
+- Нет прямых HTTP/RPC между `userbot`/`classifier`/`trader` — только pg-boss и общая БД.
+- Нет `bybit-api` / `telegram` (gramjs) / `telegraf` в `classifier` и `userbot`.
+- Нет `@openrouter/sdk` в `trader` и `api`.
+- Нет Prisma-схемы/миграций вне `packages/shared-prisma`.

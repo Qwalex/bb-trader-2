@@ -1,0 +1,26 @@
+---
+description: Единый Prisma-схема живёт в packages/shared-prisma; правила миграций и FK.
+globs: packages/shared-prisma/**
+alwaysApply: false
+---
+
+# Prisma schema и миграции
+
+Единственное место схемы — `packages/shared-prisma/prisma/schema.prisma`. Клиент импортируем через `@repo/shared-prisma`.
+
+## FK-дисциплина
+
+- Любая новая прикладная таблица **обязана** иметь `userId` или `cabinetId` (или оба). Исключения — глобальные словари, в комментарии над моделью.
+- `onDelete: Cascade` если запись бессмысленна без родителя; иначе `Restrict`.
+- Индексы: `@@index([userId, createdAt])` / `@@index([cabinetId, createdAt])` на каждую FK, для быстрой фильтрации по tenant.
+
+## Миграции
+
+- Только `prisma migrate dev` локально и `prisma migrate deploy` в CI/Railway. `prisma db push` — только для локальной песочницы.
+- Новая БД пустая, backfill обычно не нужен. Если мигрируем таблицу с добавлением `userId`/`cabinetId` — 3 шага: колонка `NULL` + backfill → `SET NOT NULL` → FK/индексы (в разных миграциях).
+
+## Запреты
+
+- Нет `enum` в схеме — только `String` (Postgres enum сложно мигрировать). Допустимые значения — в zod-схемах в `shared-ts`.
+- Нет хранения секретов plain text (`apiSecret*`, `sessionString` — только шифрованные).
+- Нет миграций, блокирующих прод больше пары секунд (большие `UPDATE` — в фоновую job, не `migrate deploy`).

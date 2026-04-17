@@ -1,0 +1,27 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "DOCKERFILE",
+    "dockerfilePath": "docker/node-base.Dockerfile",
+    "buildArgs": {
+      "APP_NAME": "@app/web",
+      "APP_DIR": "apps/web"
+    },
+    "watchPatterns": [
+      "apps/web/**",
+      "packages/shared-ts/**",
+      "pnpm-lock.yaml",
+      "pnpm-workspace.yaml",
+      "package.json",
+      "turbo.json",
+      "tsconfig.base.json"
+    ]
+  },
+  "deploy": {
+    "startCommand": "pnpm --filter @app/web start",
+    "numReplicas": 1,
+    "restartPolicyType": "ON_FAILURE",
+    "healthcheckPath": "/login",
+    "healthcheckTimeout": 30
+  }
+}

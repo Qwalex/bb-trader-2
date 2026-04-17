@@ -1,0 +1,36 @@
+---
+description: pg-boss pipeline, идемпотентность и terminal-состояния между userbot → classifier → trader.
+alwaysApply: true
+---
+
+# Pipeline и очереди
+
+Брокер: **pg-boss** в том же Postgres. Обёртка — `packages/shared-queue`.
+
+## Очереди
+
+| Очередь | Producer | Consumer | Payload (zod) |
+|---|---|---|---|
+| `classify.message` | userbot | classifier | `{ ingestEventId, userId }` |
+| `execute.signal` | classifier | trader | `{ signalDraftId, userId }` |
+| `poll.cabinet_positions` (cron) | scheduler | trader | `{ cabinetId }` |
+| `userbot.command` | api | userbot | `{ commandId, userId, type, payload }` |
+| `recalc.closed_pnl` | api | trader | `{ jobId, cabinetId }` |
+
+## Идемпотентность
+
+- `ingest_events` уникален по `(userId, chatId, messageId)`.
+- `signal_drafts` уникален по `ingestEventId`.
+- `cabinet_signals` уникален по `(cabinetId, signalDraftId)`.
+- При повторной доставке job — сначала lookup по уникальному ключу; если есть — `return 'duplicate'`, не бросать ошибку.
+
+## Состояния задач
+
+- Не-terminal: `pending`, `claimed`, `retrying`.
+- Terminal: `done`, `ignored`, `failed_permanent`.
+- Retry через pg-boss `retryLimit` + `retryBackoff: exponential`. После `retryLimit` → `failed_permanent`, без бесконечных циклов.
+
+## Watchdog
+
+- Крон в `api` раз в N минут возвращает `claimed` старше X минут обратно в `pending`.
+- Не триггерить watchdog из воркеров — только из `api`.

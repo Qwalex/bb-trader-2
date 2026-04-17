@@ -1,0 +1,38 @@
+---
+description: Правила деплоя 5 сервисов на Railway из одного монорепо.
+globs: railway.*.toml,Dockerfile.*,railpack*.json,nixpacks*.toml
+alwaysApply: false
+---
+
+# Railway deploy
+
+## Структура
+
+- Один git-репозиторий (корень workspace), 5 Railway-сервисов + PostgreSQL-плагин.
+- Каждый сервис: `Root Directory = apps/<svc>` + Config-as-code `/railway.<svc>.toml`.
+- `watchPatterns` включает `apps/<svc>/**` и `packages/**` — редеплой при изменении общих пакетов.
+
+## Config-as-code
+
+- `[build].builder = "RAILPACK"` для Node-сервисов; `"DOCKERFILE"` для `userbot` (Python).
+- `[deploy].healthcheckPath = "/health"` для `api` и `web`.
+- Для `classifier`/`trader` (воркеры без HTTP): healthcheck не ставим, только `restartPolicyType = "on_failure"`.
+- `[deploy].healthcheckTimeout = 120` для web/api.
+
+## Порт
+
+- Слушать `process.env.PORT` первым, `API_PORT`/`WEB_PORT` вторым. Не хардкодить `3001`/`3000`.
+- Host `0.0.0.0`, иначе healthcheck не достучится.
+
+## Переменные
+
+- `DATABASE_URL` — из PostgreSQL-плагина, привязать ко всем 5 сервисам.
+- `APP_ENCRYPTION_KEY` — одинаковый во всех сервисах.
+- `INITIAL_ADMIN_TELEGRAM_ID` — только у `api`.
+- Секреты в Shared Variables, не в `railway.*.toml`.
+
+## Запреты
+
+- Нет 2 сервисов с одинаковым `start`-command (дубликат конфига).
+- Нет одновременно `nixpacks.toml` и `railpack.json` в одном сервисе.
+- Не объединять `apps/api` и `apps/trader` в один сервис — убьёт смысл разделения.

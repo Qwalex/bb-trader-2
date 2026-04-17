@@ -1,0 +1,690 @@
+// =====================================================================
+// bb-trade-transformation — unified schema for all services.
+//
+// Ownership rules (see .cursor/rules/prisma-schema.mdc and multi-user-cabinets.mdc):
+//   * Пользовательские данные (tg-ingest, signal_drafts, userbot-*) — имеют userId (owner).
+//   * Торговые данные (signals, orders, balance snapshots, app_logs) — имеют cabinetId
+//     и у `Signal/AppLog` ещё userId (для быстрых выборок и RLS-политик в будущем).
+//   * Глобальные справочники (filter patterns, global settings) — без userId/cabinetId,
+//     явно помечены комментарием `/// GLOBAL`.
+//
+// NO enums (см. prisma-schema.mdc) — все status/kind как String, список значений фиксируется
+// в zod-схемах пакета @repo/shared-ts.
+// =====================================================================
+
+// Keep generated client inside the package source tree so that consumers
+// (apps/api, apps/trader, apps/classifier) get the generated types via the
+// same symlink that resolves `@repo/shared-prisma`. `.prisma/client` under
+// node_modules is not reachable from consumer `node_modules` in pnpm.
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =====================================================================
+// Users, auth sessions, userbot (Telethon) session + commands.
+// =====================================================================
+
+/// Пользователь = Telegram-аккаунт. Authn — только Telegram Login Widget.
+model User {
+  id             String   @id @default(cuid())
+  telegramUserId String   @unique
+  telegramUsername String?
+  displayName    String?
+  photoUrl       String?
+  role           String   @default("user") // user | admin
+  enabled        Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  userbotSession      UserbotSession?
+  cabinets            Cabinet[]
+  sessions            Session[]
+  userbotChannels     UserbotChannel[]
+  userbotCommands     UserbotCommand[]
+  ingestEvents        IngestEvent[]
+  signalDrafts        SignalDraft[]
+  mirrorMessages      TgUserbotMirrorMessage[]
+  signals             Signal[]
+  appLogs             AppLog[]
+
+  @@index([enabled])
+}
+
+/// HTTP-сессия web/api (в cookie хранится только Session.id).
+model Session {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  activeCabinetId String?
+  activeCabinet   Cabinet? @relation("SessionActiveCabinet", fields: [activeCabinetId], references: [id], onDelete: SetNull)
+  issuedVia       String   @default("telegram_login") // telegram_login | api_token (future)
+  userAgent       String?
+  ip              String?
+  expiresAt       DateTime
+  revokedAt       DateTime?
+  createdAt       DateTime @default(now())
+
+  @@index([userId, expiresAt])
+  @@index([expiresAt])
+}
+
+/// 1 пользователь = 1 активная userbot-сессия (Telethon session string, зашифрован AES-GCM).
+model UserbotSession {
+  userId        String   @id
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// encrypted Telethon session string (AES-GCM, APP_ENCRYPTION_KEY)
+  sessionString String?
+  phone         String?
+  /// disconnected | connecting | connected | qr_pending | failed
+  status        String   @default("disconnected")
+  lastSeenAt    DateTime?
+  lastError     String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+/// Каналы/чаты, которые слушает userbot конкретного пользователя.
+model UserbotChannel {
+  id             String   @id @default(cuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chatId         String
+  title          String
+  username       String?
+  enabled        Boolean  @default(false)
+  sourcePriority Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  cabinetFilters CabinetChannelFilter[]
+
+  @@unique([userId, chatId])
+  @@index([userId, enabled])
+}
+
+/// Команды от api -> userbot (login_qr, logout, add_channel, remove_channel, reconnect).
+model UserbotCommand {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type        String // login_qr | logout | add_channel | remove_channel | reconnect | sync_dialogs
+  payloadJson String?
+  /// queued | running | done | failed | expired
+  status      String   @default("queued")
+  resultJson  String?
+  error       String?
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([userId, status, createdAt])
+  @@index([status, createdAt])
+}
+
+// =====================================================================
+// Cabinets — per-cabinet Bybit keys, settings, channel filters, publish groups.
+// =====================================================================
+
+model Cabinet {
+  id          String   @id @default(cuid())
+  ownerUserId String
+  owner       User     @relation(fields: [ownerUserId], references: [id], onDelete: Cascade)
+  slug        String
+  displayName String
+  /// "mainnet" | "testnet" — какая Bybit-сеть используется по умолчанию
+  network     String   @default("mainnet")
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  bybitKey        CabinetBybitKey?
+  settings        CabinetSetting[]
+  channelFilters  CabinetChannelFilter[]
+  publishGroups   CabinetPublishGroup[]
+  cabinetSignals  CabinetSignal[]
+  signals         Signal[]
+  balanceSnapshots BalanceSnapshot[]
+  appLogs         AppLog[]
+  activeSessions  Session[] @relation("SessionActiveCabinet")
+  orders          Order[]
+  signalEvents    SignalEvent[]
+
+  @@unique([ownerUserId, slug])
+  @@index([ownerUserId, enabled])
+}
+
+model CabinetBybitKey {
+  cabinetId         String   @id
+  cabinet           Cabinet  @relation(fields: [cabinetId], references: [id], onDelete: Cascade)
+  apiKeyMainnet     String?
+  /// encrypted (AES-GCM)
+  apiSecretMainnet  String?
+  apiKeyTestnet     String?
+  /// encrypted (AES-GCM)
+  apiSecretTestnet  String?
+  testnet           Boolean  @default(false)
+  /// Последняя успешная проверка ключей (GET /v5/account/info) — для UI-индикатора
+  lastVerifiedAt    DateTime?
+  lastVerifyError   String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+/// Настройки per-cabinet (аналог старой таблицы Setting, но с cabinetId).
+/// Ключи: DEFAULT_ORDER_USD, FORCED_LEVERAGE, BUMP_TO_MIN_EXCHANGE_LOT, TP_SL_STEP_POLICY, ...
+model CabinetSetting {
+  id        String   @id @default(cuid())
+  cabinetId String
+  cabinet   Cabinet  @relation(fields: [cabinetId], references: [id], onDelete: Cascade)
+  key       String
+  value     String
+  updatedAt DateTime @updatedAt
+
+  @@unique([cabinetId, key])
+  @@index([key])
+}
+
+/// Переопределение настроек канала для конкретного кабинета (бывший TgUserbotChat, теперь per-cabinet).
+model CabinetChannelFilter {
+  id              String   @id @default(cuid())
+  cabinetId       String
+  cabinet         Cabinet  @relation(fields: [cabinetId], references: [id], onDelete: Cascade)
+  userbotChannelId String
+  userbotChannel   UserbotChannel @relation(fields: [userbotChannelId], references: [id], onDelete: Cascade)
+  enabled         Boolean  @default(true)
+  defaultLeverage Int?
+  forcedLeverage  Int?
+  /// "10" или "10%" — переопределение DEFAULT_ORDER_USD для канала в этом кабинете
+  defaultEntryUsd String?
+  minLotBump      Boolean?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([cabinetId, userbotChannelId])
+  @@index([cabinetId, enabled])
+}
+
+/// Куда кабинет публикует зеркалирование/подтверждение сигналов (bot-чат).
+model CabinetPublishGroup {
+  id             String   @id @default(cuid())
+  cabinetId      String
+  cabinet        Cabinet  @relation(fields: [cabinetId], references: [id], onDelete: Cascade)
+  title          String
+  chatId         String
+  enabled        Boolean  @default(true)
+  publishEveryN  Int      @default(1)
+  signalCounter  Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  mirrorMessages TgUserbotMirrorMessage[]
+
+  @@unique([cabinetId, chatId])
+  @@index([cabinetId, enabled])
+}
+
+// =====================================================================
+// Pipeline stage 1: ingest (userbot) -> signal draft (classifier).
+// =====================================================================
+
+/// Сырое сообщение, записанное userbot'ом. Дальше consumer classify.message обрабатывает через OpenRouter.
+model IngestEvent {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  chatId          String
+  messageId       String
+  /// уникальный ключ для идемпотентности входа (userId-chatId-messageId)
+  dedupMessageKey String   @unique
+  text            String?
+  /// reply-контекст (при классификации close/result)
+  replyToChatId   String?
+  replyToMessageId String?
+  replyToText     String?
+  rawJson         String? // сырая MTProto-структура, если нужна
+  /// pending_classify | classifying | classified | ignored | failed
+  status          String   @default("pending_classify")
+  /// signal | close | result | reentry | ignore | null
+  classification  String?
+  classifyError   String?
+  classifiedAt    DateTime?
+  createdAt       DateTime @default(now())
+
+  signalDrafts    SignalDraft[]
+  mirrorMessages  TgUserbotMirrorMessage[]
+
+  @@index([userId, status, createdAt])
+  @@index([chatId, messageId])
+  @@index([createdAt])
+}
+
+/// Результат classifier'а — один сигнал, готовый к fanout по кабинетам.
+model SignalDraft {
+  id               String   @id @default(cuid())
+  userId           String
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ingestEventId    String
+  ingestEvent      IngestEvent @relation(fields: [ingestEventId], references: [id], onDelete: Cascade)
+  sourceChatId     String
+  sourceMessageId  String
+  /// BUY | SELL
+  direction        String
+  pair             String
+  /// JSON number[]
+  entries          String
+  /// true — entries это зона [low, high]
+  entryIsRange     Boolean  @default(false)
+  stopLoss         Float
+  /// JSON number[]
+  takeProfits      String
+  leverage         Int
+  /// hash от (pair, direction, entries, stopLoss, takeProfits) — дедуп сигнала
+  signalHash       String
+  rawMessage       String?
+  aiRequest        String?
+  aiResponse       String?
+  /// ready | fanned_out | rejected
+  status           String   @default("ready")
+  rejectReason     String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  cabinetSignals   CabinetSignal[]
+
+  @@unique([userId, signalHash])
+  @@index([userId, status, createdAt])
+  @@index([sourceChatId, sourceMessageId])
+}
+
+/// GLOBAL: хеши сигналов (защита от дублей на уровне всей системы, сохранено из старой системы).
+model TgUserbotSignalHash {
+  hash      String   @id
+  createdAt DateTime @default(now())
+}
+
+// =====================================================================
+// Pipeline stage 2: trader fanout — один SignalDraft -> N CabinetSignal.
+// =====================================================================
+
+model CabinetSignal {
+  id             String   @id @default(cuid())
+  cabinetId      String
+  cabinet        Cabinet  @relation(fields: [cabinetId], references: [id], onDelete: Cascade)
+  signalDraftId  String
+  signalDraft    SignalDraft @relation(fields: [signalDraftId], references: [id], onDelete: Cascade)
+  signalId       String?  @unique
+  signal         Signal?  @relation(fields: [signalId], references: [id], onDelete: SetNull)
+  /// queued | executing | executed | skipped_by_filter | failed
+  status         String   @default("queued")
+  skipReason     String?
+  error          String?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([cabinetId, signalDraftId])
+  @@index([cabinetId, status, createdAt])
+  @@index([status, createdAt])
+}
+
+// =====================================================================
+// Pipeline stage 3: Bybit-ордера (per-cabinet).
+// =====================================================================
+
+model Signal {
+  id               String    @id @default(cuid())
+  cabinetId        String
+  cabinet          Cabinet   @relation(fields: [cabinetId], references: [id], onDelete: Cascade)
+  userId           String
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pair             String
+  direction        String
+  /// JSON number[]
+  entries          String
+  entryIsRange     Boolean   @default(false)
+  stopLoss         Float
+  /// JSON number[]
+  takeProfits      String
+  leverage         Int
+  /// Номинал в USDT (фактический дефолт — CabinetSetting.DEFAULT_ORDER_USD)
+  orderUsd         Float     @default(10)
+  capitalPercent   Float     @default(0)
+  source           String?
+  sourceChatId     String?
+  sourceMessageId  String?
+  signalExternalId String?
+  rawMessage       String?
+  /// PENDING | OPEN | ORDERS_PLACED | CLOSED_WIN | CLOSED_LOSS | CLOSED_MIXED | FAILED
+  status           String
+  realizedPnl      Float?
+  closedAt         DateTime?
+  /// шаг подтягивания SL: -1 не применено, 0 BE после TP1, 1 SL@TP1 после TP2, ...
+  tpSlStep         Int       @default(-1)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  deletedAt        DateTime?
+
+  orders           Order[]
+  events           SignalEvent[]
+  cabinetSignal    CabinetSignal?
+
+  @@index([cabinetId, deletedAt, createdAt])
+  @@index([cabinetId, deletedAt, closedAt])
+  @@index([cabinetId, sourceChatId, sourceMessageId])
+  @@index([cabinetId, sourceChatId, signalExternalId])
+  @@index([userId, createdAt])
+}
+
+model SignalEvent {
+  id        String   @id @default(cuid())
+  cabinetId String
+  cabinet   Cabinet  @relation(fields: [cabinetId], references: [id], onDelete: Cascade)
+  signalId  String
+  signal    Signal   @relation(fields: [signalId], references: [id], onDelete: Cascade)
+  type      String
+  payload   String?
+  createdAt DateTime @default(now())
+
+  @@index([signalId, createdAt])
+  @@index([cabinetId, createdAt])
+}
+
+model Order {
+  id           String    @id @default(cuid())
+  cabinetId    String
+  cabinet      Cabinet   @relation(fields: [cabinetId], references: [id], onDelete: Cascade)
+  signalId     String
+  signal       Signal    @relation(fields: [signalId], references: [id], onDelete: Cascade)
+  bybitOrderId String?
+  /// ENTRY | DCA | TP | SL
+  orderKind    String
+  side         String
+  price        Float?
+  qty          Float?
+  status       String
+  pnl          Float?
+  filledAt     DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([signalId])
+  @@index([cabinetId, status, createdAt])
+}
+
+/// Один снимок суммарного USDT-equity кабинета — для графика на дашборде.
+model BalanceSnapshot {
+  id        String   @id @default(cuid())
+  cabinetId String
+  cabinet   Cabinet  @relation(fields: [cabinetId], references: [id], onDelete: Cascade)
+  totalUsd  Float
+  createdAt DateTime @default(now())
+
+  @@index([cabinetId, createdAt])
+}
+
+// =====================================================================
+// Logs, mirror, costs.
+// =====================================================================
+
+/// Per-cabinet / per-user лог. Для админских глобальных событий — userId=null, cabinetId=null.
+model AppLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  cabinetId String?
+  cabinet   Cabinet? @relation(fields: [cabinetId], references: [id], onDelete: SetNull)
+  /// info | warn | error | debug
+  level     String
+  /// openrouter | telegram | bybit | orders | userbot | classifier | trader | api | system
+  category  String
+  service   String?  // userbot | classifier | trader | api | web
+  message   String
+  /// JSON (sanitized: никаких apiSecret/session_string)
+  payload   String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([cabinetId, createdAt])
+  @@index([userId, createdAt])
+  @@index([category, createdAt])
+  @@index([level, createdAt])
+}
+
+/// Mirror-сообщения: публикация входящего ингест-сообщения в бот-чат кабинета.
+model TgUserbotMirrorMessage {
+  id                     String   @id @default(cuid())
+  userId                 String
+  user                   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  publishGroupId         String
+  publishGroup           CabinetPublishGroup @relation(fields: [publishGroupId], references: [id], onDelete: Cascade)
+  ingestId               String
+  ingestEvent            IngestEvent @relation(fields: [ingestId], references: [id], onDelete: Cascade)
+  sourceChatId           String
+  sourceMessageId        String
+  rootSourceChatId       String?
+  rootSourceMessageId    String?
+  /// signal | result | cancel
+  kind                   String
+  /// posted | skipped_by_n | skipped_no_root | failed
+  status                 String
+  targetChatId           String
+  targetMessageId        String?
+  replyToTargetMessageId String?
+  error                  String?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@unique([publishGroupId, ingestId, kind])
+  @@index([publishGroupId, sourceChatId, sourceMessageId, kind])
+  @@index([publishGroupId, rootSourceChatId, rootSourceMessageId, kind])
+  @@index([userId, createdAt])
+}
+
+/// Стоимость LLM-запросов (OpenRouter billing poller).
+model OpenrouterGenerationCost {
+  id           String   @id @default(cuid())
+  generationId String   @unique
+  operation    String?
+  chatId       String?
+  source       String?
+  ingestId     String?
+  userId       String?
+  cabinetId    String?
+  costUsd      Float?
+  /// pending | resolved | failed
+  status       String   @default("pending")
+  attempts     Int      @default(0)
+  nextRetryAt  DateTime?
+  lastError    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([status, nextRetryAt])
+  @@index([createdAt])
+  @@index([userId, createdAt])
+}
+
+// =====================================================================
+// GLOBAL: pattern-библиотека распознавания типа сообщения (одинакова для всех пользователей).
+// =====================================================================
+
+/// GLOBAL
+model TgUserbotFilterPattern {
+  id            String   @id @default(cuid())
+  groupName     String
+  /// signal | close | result | reentry | ignore
+  kind          String
+  pattern       String
+  requiresQuote Boolean  @default(false)
+  enabled       Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([groupName, kind, enabled])
+}
+
+/// GLOBAL
+model TgUserbotFilterExample {
+  id            String   @id @default(cuid())
+  groupName     String
+  /// signal | close | result | reentry | ignore
+  kind          String
+  example       String
+  requiresQuote Boolean  @default(false)
+  enabled       Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([groupName, kind, enabled])
+}
+
+/// GLOBAL: ключ-значение для админ-настроек всей системы (PUBLIC_SIGNUP_ENABLED, LLM_MODEL, ...).
+model GlobalSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+// =====================================================================
+// GLOBAL admin/ops jobs (диагностика, PnL-бэкфилл).
+// =====================================================================
+
+model RecalcClosedPnlJob {
+  id         String   @id
+  /// queued | running | completed | failed
+  status     String
+  dryRun     Boolean
+  limit      Int
+  cabinetId  String?
+  createdAt  DateTime @default(now())
+  startedAt  DateTime?
+  finishedAt DateTime?
+  resultJson String?
+  error      String?
+
+  @@index([createdAt])
+  @@index([cabinetId, createdAt])
+}
+
+model DiagnosticRun {
+  id          String   @id @default(cuid())
+  triggeredByUserId String?
+  /// running | completed | failed
+  status      String
+  requestJson String?
+  /// JSON string[]
+  modelsJson  String
+  caseCount   Int      @default(0)
+  summary     String?
+  error       String?
+  startedAt   DateTime @default(now())
+  finishedAt  DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  cases        DiagnosticCase[]
+  modelResults DiagnosticModelResult[]
+  stepResults  DiagnosticStepResult[]
+  logs         DiagnosticLog[]
+
+  @@index([createdAt])
+  @@index([status, createdAt])
+}
+
+model DiagnosticCase {
+  id        String   @id @default(cuid())
+  runId     String
+  run       DiagnosticRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  ingestId  String?
+  signalId  String?
+  chatId    String?
+  messageId String?
+  title     String?
+  status    String   @default("pending")
+  traceJson String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  modelResults DiagnosticModelResult[]
+  stepResults  DiagnosticStepResult[]
+  logs         DiagnosticLog[]
+
+  @@index([runId, createdAt])
+  @@index([ingestId])
+  @@index([signalId])
+}
+
+model DiagnosticModelResult {
+  id          String   @id @default(cuid())
+  runId       String
+  caseId      String
+  model       String
+  status      String
+  summary     String?
+  rawResponse String?
+  inputTokens Int?
+  outputTokens Int?
+  totalTokens Int?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  run            DiagnosticRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  diagnosticCase DiagnosticCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  stepResults    DiagnosticStepResult[]
+  logs           DiagnosticLog[]
+
+  @@unique([runId, caseId, model])
+  @@index([runId, model])
+  @@index([caseId, createdAt])
+}
+
+model DiagnosticStepResult {
+  id                   String   @id @default(cuid())
+  runId                String
+  caseId               String
+  modelResultId        String?
+  stepKey              String
+  status               String
+  comment              String?
+  issuesJson           String?
+  evidenceJson         String?
+  missingContextJson   String?
+  recommendedFixesJson String?
+  payloadJson          String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  run            DiagnosticRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  diagnosticCase DiagnosticCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  modelResult    DiagnosticModelResult? @relation(fields: [modelResultId], references: [id], onDelete: Cascade)
+
+  @@index([runId, caseId, createdAt])
+  @@index([modelResultId, stepKey])
+}
+
+model DiagnosticLog {
+  id            String   @id @default(cuid())
+  runId         String
+  caseId        String?
+  modelResultId String?
+  level         String
+  category      String
+  message       String
+  payload       String?
+  createdAt     DateTime @default(now())
+
+  run            DiagnosticRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  diagnosticCase DiagnosticCase? @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  modelResult    DiagnosticModelResult? @relation(fields: [modelResultId], references: [id], onDelete: Cascade)
+
+  @@index([runId, createdAt])
+  @@index([caseId, createdAt])
+}

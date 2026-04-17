@@ -1,0 +1,91 @@
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  NotFoundException,
+  Param,
+  Patch,
+  Post,
+  Put,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
+import {
+  CreateCabinetDto,
+  UpdateCabinetDto,
+  UpdateSettingsDto,
+  UpsertBybitKeyDto,
+} from '@repo/shared-ts';
+import { SessionGuard, type RequestWithUser } from '../auth/session.guard.js';
+import { CabinetsService } from './cabinets.service.js';
+
+@Controller('cabinets')
+@UseGuards(SessionGuard)
+export class CabinetsController {
+  constructor(private readonly cabinets: CabinetsService) {}
+
+  @Get()
+  list(@Req() req: RequestWithUser) {
+    return this.cabinets.listForUser(req.authUserId!);
+  }
+
+  @Post()
+  async create(@Req() req: RequestWithUser, @Body() body: unknown) {
+    const parsed = CreateCabinetDto.safeParse(body);
+    if (!parsed.success) throw new BadRequestException(parsed.error.issues);
+    return this.cabinets.create(req.authUserId!, parsed.data);
+  }
+
+  @Patch(':id')
+  async update(@Req() req: RequestWithUser, @Param('id') id: string, @Body() body: unknown) {
+    const parsed = UpdateCabinetDto.safeParse(body);
+    if (!parsed.success) throw new BadRequestException(parsed.error.issues);
+    try {
+      await this.cabinets.update(req.authUserId!, id, parsed.data);
+    } catch {
+      throw new NotFoundException('Cabinet not found');
+    }
+    return { ok: true };
+  }
+
+  @Delete(':id')
+  async remove(@Req() req: RequestWithUser, @Param('id') id: string) {
+    try {
+      await this.cabinets.remove(req.authUserId!, id);
+    } catch {
+      throw new NotFoundException('Cabinet not found');
+    }
+    return { ok: true };
+  }
+
+  @Put(':id/bybit-key')
+  async upsertBybitKey(
+    @Req() req: RequestWithUser,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ) {
+    const parsed = UpsertBybitKeyDto.safeParse(body);
+    if (!parsed.success) throw new BadRequestException(parsed.error.issues);
+    await this.cabinets.upsertBybitKey(req.authUserId!, id, parsed.data);
+    return { ok: true };
+  }
+
+  @Get(':id/settings')
+  getSettings(@Req() req: RequestWithUser, @Param('id') id: string) {
+    return this.cabinets.getSettings(req.authUserId!, id);
+  }
+
+  @Put(':id/settings')
+  async setSettings(
+    @Req() req: RequestWithUser,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ) {
+    const parsed = UpdateSettingsDto.safeParse(body);
+    if (!parsed.success) throw new BadRequestException(parsed.error.issues);
+    await this.cabinets.setSettings(req.authUserId!, id, parsed.data.values);
+    return { ok: true };
+  }
+}

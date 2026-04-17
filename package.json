@@ -1,0 +1,34 @@
+{
+  "name": "bb-trade-transformation",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Multi-service trading system: userbot (Python) -> classifier (Node) -> trader (Node) with per-user cabinets.",
+  "license": "UNLICENSED",
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=9"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev --parallel",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "clean": "turbo run clean && rm -rf node_modules",
+    "format": "prettier --write \"**/*.{ts,tsx,md,json,yaml,yml}\" --ignore-path .gitignore",
+    "format:check": "prettier --check \"**/*.{ts,tsx,md,json,yaml,yml}\" --ignore-path .gitignore",
+    "db:generate": "pnpm --filter @repo/shared-prisma db:generate",
+    "db:migrate": "pnpm --filter @repo/shared-prisma db:migrate",
+    "db:migrate:deploy": "pnpm --filter @repo/shared-prisma db:migrate:deploy",
+    "db:studio": "pnpm --filter @repo/shared-prisma db:studio",
+    "db:validate": "pnpm --filter @repo/shared-prisma db:validate",
+    "docker:dev:up": "docker compose -f docker-compose.dev.yml up -d",
+    "docker:dev:down": "docker compose -f docker-compose.dev.yml down",
+    "docker:dev:logs": "docker compose -f docker-compose.dev.yml logs -f"
+  },
+  "devDependencies": {
+    "prettier": "^3.4.2",
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.3"
+  }
+}

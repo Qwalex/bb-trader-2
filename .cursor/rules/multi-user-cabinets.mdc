@@ -1,0 +1,29 @@
+---
+description: Модель "Пользователь → 1 userbot → N кабинетов"; обязательная изоляция по userId/cabinetId.
+alwaysApply: true
+---
+
+# Мульти-пользователи и кабинеты
+
+Иерархия: **`User` (Telegram login) → `UserbotSession` (1:1) → `Cabinet` (1:N)**. Каждый кабинет имеет свои `CabinetBybitKey`, `CabinetSetting`, `CabinetChannelFilter`.
+
+## Правила для любого запроса к БД
+
+- Выборка/запись в `Signal`, `Order`, `SignalEvent`, `BalanceSnapshot`, `AppLog`, `CabinetSignal`, `OpenrouterGenerationCost`, `TgUserbotMirrorMessage` — **обязан быть фильтр по `cabinetId`**. Если не указан — это баг.
+- `IngestEvent`, `SignalDraft`, `UserbotChannel`, `UserbotCommand`, `UserbotSession` — фильтруем по `userId`.
+- Глобальные (без `userId`/`cabinetId`): `GlobalSetting`, `TgUserbotFilterPattern`, `TgUserbotFilterExample`, `RecalcClosedPnlJob`, `DiagnosticRun` и дочерние.
+
+## Настройки
+
+- `SettingsService.get(cabinetId, key)` смотрит `CabinetSetting` → `GlobalSetting` → `process.env` → hard-default.
+- Bybit-клиент создаётся по `cabinetId` (лениво кэшируется в `trader`). Не тянуть ключи из env.
+
+## Sessions / гварды в api
+
+- Кука хранит только `sessionId`; сервер резолвит `Session → userId + activeCabinetId`.
+- Контроллеры `api` принимают `cabinetId` **только из `session.activeCabinetId`**, а не из тела/query (иначе — IDOR).
+
+## Fanout сигналов в trader
+
+- 1 `SignalDraft(userId)` → N `CabinetSignal(cabinetId)` по каждому `Cabinet where ownerUserId = userId AND enabled`.
+- `CabinetChannelFilter` применяется на этапе fanout; если канал выключен — пропускаем кабинет.

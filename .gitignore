@@ -1,0 +1,59 @@
+# Reference-only folder (old production project)
+/bb-trader/
+
+# Dependencies
+node_modules/
+.pnpm-store/
+.pnpm-debug.log*
+
+# Build output
+dist/
+build/
+.next/
+out/
+.turbo/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.python-version
+*.egg-info/
+
+# Prisma
+.prisma/
+packages/shared-prisma/src/generated/
+packages/shared-prisma/prisma/dev.db*
+packages/shared-prisma/prisma/migrations/**/migration_lock.toml.bak
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.local
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Coverage (no tests but keep just in case)
+coverage/
+.nyc_output/
+
+# Temp
+tmp/
+temp/

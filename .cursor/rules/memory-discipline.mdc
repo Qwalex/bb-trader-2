@@ -1,0 +1,38 @@
+---
+description: Бюджет памяти и дисциплина импортов в сервисах; цель рефакторинга — снизить RAM в 2-3 раза.
+alwaysApply: true
+---
+
+# Дисциплина по памяти
+
+Главная причина рефакторинга — перегруз Railway. Не тащим тяжёлые зависимости "на всякий случай".
+
+## Ориентиры RSS (прод)
+
+- `userbot` (Python, 1–10 сессий): ≤ 250 MB
+- `classifier`: ≤ 150 MB
+- `trader`: ≤ 250 MB
+- `api`: ≤ 200 MB
+- `web` (Next.js prod): ≤ 250 MB
+
+Превысили — ищем причину (кэши без TTL, singleton'ы с историей, большие in-memory словари).
+
+## Запреты на импорты
+
+| Пакет | Запрещён в |
+|---|---|
+| `bybit-api` | `userbot`, `classifier`, `api`, `web` |
+| `telegram` (gramjs) | любом Node-сервисе (весь userbot — Python) |
+| `telegraf` | `userbot`, `classifier`, `trader`, `web` |
+| `@openrouter/sdk`, `openai` | `userbot`, `trader`, `api`, `web` |
+| `@nestjs/*` | `classifier`, `trader`, `userbot` |
+| `next` | вне `apps/web` |
+| `prisma` (CLI) | вне `packages/shared-prisma` |
+
+## Общие правила
+
+- Воркеры (`classifier`, `trader`) — **не Nest-приложения**: тонкий `main.ts` с pg-boss + Prisma-клиентом + ручным DI.
+- Кэши — `Map` с TTL или LRU, без "вечного роста".
+- Никаких `fs.watch`/`chokidar` в прод-коде.
+- Swagger/class-transformer/class-validator — только в `api`.
+- Перед новой зависимостью — обосновать в PR-описании.
