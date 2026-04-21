@@ -359,6 +359,12 @@ curl -i https://<api-domain>.up.railway.app/auth/me
 
 **Healthcheck failed у `api` / `web`, публичный домен отдаёт `Application failed to respond`** → сервис слушает не тот порт, куда Railway шлёт запросы. Railway автоматически инжектит `PORT` (случайный) и ждёт, что приложение привяжется именно к нему. Решение: в Variables сервиса явно задать `PORT=3001` для api и `PORT=3000` для web. Код api уже уважает `PORT` с приоритетом над `API_PORT`, Next.js (`next start`) уважает `$PORT` по умолчанию. Если после этого healthcheck всё ещё падает — проверь, что в логах api видно `api.ready { port: 3001 }` и что `API_CORS_ORIGINS` содержит домен web.
 
+**Healthcheck отдаёт 401/500 хотя сервис запустился** → healthcheckPath указывает на закрытый guard'ом или зависящий от других сервисов endpoint. Railway считает успехом только 2xx. У нас:
+- `api` → `/health` (`HealthController`, без guard'ов и БД);
+- `web` → `/api/health` (Next.js Route Handler, не зависит от api).
+
+Если ты (или agent) поставит healthcheck на `/auth/me` или `/login` — будет мигать «failed», потому что `/auth/me` возвращает 401 без сессии, а `/login` может упасть в 500, если в server-component зависит от api, а тот ещё не поднялся.
+
 **Билд `userbot` падает с `runc run failed: container process is already dead` на строке `COPY apps/userbot/...`** → Railway заворачивает «файла нет в build context» в общий runc-error. Проверь `git check-ignore -v apps/userbot/pyproject.toml apps/userbot/uv.lock` — если хоть один из них игнорируется, Railway его не получит. В репе специально **убрали** `.python-version` из `.gitignore`; если кто-то вернёт — Dockerfile всё равно не должен его требовать (`FROM python:3.12-slim` уже фиксирует версию). Решение: закоммить недостающие файлы и убедись, что они в git.
 
 **`userbot` крашится в рантайме с `ModuleNotFoundError: No module named 'structlog'` (или любая другая зависимость)** → `uv sync` ставит зависимости в venv `/app/.venv`, а команда запуска вызывает **системный** `python` без пакетов. В Dockerfile обязательно должен быть `ENV PATH="/app/.venv/bin:$PATH"` **после** `uv sync`, иначе `python -m bb_userbot.main` возьмёт не тот интерпретатор. Альтернатива — запускать через `uv run python -m bb_userbot.main` (медленнее старт, но тоже работает).
