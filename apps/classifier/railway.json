@@ -14,7 +14,7 @@
     ]
   },
   "deploy": {
-    "startCommand": "pnpm --filter @app/classifier start",
+    "startCommand": "pnpm start",
     "numReplicas": 1,
     "restartPolicyType": "ON_FAILURE"
   }

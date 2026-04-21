@@ -14,7 +14,7 @@
     ]
   },
   "deploy": {
-    "startCommand": "pnpm --filter @app/api start",
+    "startCommand": "pnpm start",
     "numReplicas": 1,
     "restartPolicyType": "ON_FAILURE",
     "healthcheckPath": "/auth/me",
