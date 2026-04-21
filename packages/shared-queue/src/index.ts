@@ -1,6 +1,6 @@
 import PgBoss from 'pg-boss';
 import type { ZodSchema } from 'zod';
-import type { QueueName } from '@repo/shared-ts';
+import type { QueueName } from '@repo/shared-ts/enums';
 
 export { PgBoss };
 
