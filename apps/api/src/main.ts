@@ -38,8 +38,9 @@ async function bootstrap(): Promise<void> {
   process.on('SIGTERM', () => void shutdown('SIGTERM'));
   process.on('SIGINT', () => void shutdown('SIGINT'));
 
-  await app.listen(config.API_PORT, '0.0.0.0');
-  app.getHttpAdapter().getInstance().log.info({ port: config.API_PORT }, 'api.ready');
+  const port = config.PORT ?? config.API_PORT;
+  await app.listen(port, '0.0.0.0');
+  app.getHttpAdapter().getInstance().log.info({ port }, 'api.ready');
 }
 
 bootstrap().catch((error) => {

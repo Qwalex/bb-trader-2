@@ -126,23 +126,26 @@ Internal DNS: каждый сервис доступен внутри проек
 ```env
 APP_NAME=@app/api
 APP_DIR=apps/api
-API_PORT=3001
+PORT=3001
 API_CORS_ORIGINS=https://<твой-web-домен>.up.railway.app
 ```
 
-После того как `web` получит публичный домен — впиши его сюда и передеплой api, иначе браузер получит CORS-ошибку.
+- `PORT=3001` — Railway по умолчанию подставляет случайный `PORT`, мы фиксируем его, чтобы (а) healthcheck бил в тот же порт, что код действительно слушает, (б) в web-сервисе можно было прописать предсказуемый `API_INTERNAL_URL`. Код api уважает `PORT` (приоритет) и `API_PORT` (фолбэк на 3001).
+- После того как `web` получит публичный домен — впиши его в `API_CORS_ORIGINS` и передеплой api, иначе браузер получит CORS-ошибку.
 
 ### `web`
 
 ```env
 APP_NAME=@app/web
 APP_DIR=apps/web
+PORT=3000
 API_INTERNAL_URL=http://api.railway.internal:3001
 NEXT_PUBLIC_TELEGRAM_BOT_USERNAME=<имя_твоего_бота_без_@>
 NEXT_PUBLIC_BRAND_NAME=bb-trader
 ```
 
-`API_INTERNAL_URL` — это для server-side fetch из Next.js к api. Клиент в браузер этот URL никогда не увидит.
+- `PORT=3000` — аналогично api, фиксируем явно. `next start` сам читает `$PORT` и слушает на нём.
+- `API_INTERNAL_URL` — для server-side fetch из Next.js к api. Порт должен совпадать с `PORT` сервиса api. Клиент в браузер этот URL никогда не увидит.
 
 ### `userbot`
 
@@ -353,6 +356,8 @@ curl -i https://<api-domain>.up.railway.app/auth/me
 **Билд падает с `flag '--mount=type=cache,...' is missing the cacheKey prefix from its id`** → кто-то добавил в Dockerfile `RUN --mount=type=cache,id=...`. Railway принимает cache mounts только в формате `id=s/<service-id>-<target>,target=<target>` и **не разрешает** ARG/ENV в id ([docs](https://docs.railway.com/guides/dockerfiles#cache-mounts)). У нас один общий `docker/node-base.Dockerfile` на 4 сервиса, поэтому hardcoded `service-id` туда не вписать. Решение: не использовать `--mount=type=cache` — обычный Docker layer cache уже покрывает кейс «lockfile не менялся». Если реально упираешься в билд-время — делай per-service Dockerfile с hardcoded id, а не общий.
 
 **Билд падает с `pnpm: Unsupported package selector: {...}` на строке `pnpm --filter "${APP_NAME}..." build`** → `APP_NAME` не пробросилась в билд, `${APP_NAME}` = пустая строка, и pnpm получает фильтр `...` без имени пакета. Причина: Railway **игнорирует `buildArgs` в `railway.json`** ([docs](https://docs.railway.com/builds/dockerfiles#using-variables-at-build-time)). Пробрасывать билд-переменные надо через обычные Service Variables в UI — Railway сам подставит их в `ARG`, объявленные в Dockerfile. Решение: в **Variables** каждого Node-сервиса должны быть заданы `APP_NAME` (например `@app/api`) и `APP_DIR` (`apps/api`). Смотри раздел «Per-service переменные» выше.
+
+**Healthcheck failed у `api` / `web`, публичный домен отдаёт `Application failed to respond`** → сервис слушает не тот порт, куда Railway шлёт запросы. Railway автоматически инжектит `PORT` (случайный) и ждёт, что приложение привяжется именно к нему. Решение: в Variables сервиса явно задать `PORT=3001` для api и `PORT=3000` для web. Код api уже уважает `PORT` с приоритетом над `API_PORT`, Next.js (`next start`) уважает `$PORT` по умолчанию. Если после этого healthcheck всё ещё падает — проверь, что в логах api видно `api.ready { port: 3001 }` и что `API_CORS_ORIGINS` содержит домен web.
 
 ---
 
