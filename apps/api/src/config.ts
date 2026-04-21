@@ -11,7 +11,11 @@ const Env = z.object({
     .default('http://localhost:3000')
     .transform((s) => s.split(',').map((x) => x.trim()).filter(Boolean)),
   API_PORT: z.coerce.number().int().positive().default(3001),
-  PORT: z.coerce.number().int().positive().optional(),
+  /** Railway (и docker-compose) иногда кладут `PORT=""`; иначе z.coerce даёт 0 → падение env. */
+  PORT: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.coerce.number().int().positive().optional(),
+  ),
   SESSION_TTL_DAYS: z.coerce.number().int().positive().default(30),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 });
