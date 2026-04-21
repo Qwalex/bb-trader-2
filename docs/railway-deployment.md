@@ -352,6 +352,8 @@ curl -i https://<api-domain>.up.railway.app/auth/me
 
 **Билд падает с `flag '--mount=type=cache,...' is missing the cacheKey prefix from its id`** → кто-то добавил в Dockerfile `RUN --mount=type=cache,id=...`. Railway принимает cache mounts только в формате `id=s/<service-id>-<target>,target=<target>` и **не разрешает** ARG/ENV в id ([docs](https://docs.railway.com/guides/dockerfiles#cache-mounts)). У нас один общий `docker/node-base.Dockerfile` на 4 сервиса, поэтому hardcoded `service-id` туда не вписать. Решение: не использовать `--mount=type=cache` — обычный Docker layer cache уже покрывает кейс «lockfile не менялся». Если реально упираешься в билд-время — делай per-service Dockerfile с hardcoded id, а не общий.
 
+**Билд падает с `pnpm: Unsupported package selector: {...}` на строке `pnpm --filter "${APP_NAME}..." build`** → `APP_NAME` не пробросилась в билд, `${APP_NAME}` = пустая строка, и pnpm получает фильтр `...` без имени пакета. Причина: Railway **игнорирует `buildArgs` в `railway.json`** ([docs](https://docs.railway.com/builds/dockerfiles#using-variables-at-build-time)). Пробрасывать билд-переменные надо через обычные Service Variables в UI — Railway сам подставит их в `ARG`, объявленные в Dockerfile. Решение: в **Variables** каждого Node-сервиса должны быть заданы `APP_NAME` (например `@app/api`) и `APP_DIR` (`apps/api`). Смотри раздел «Per-service переменные» выше.
+
 ---
 
 ## Откат
