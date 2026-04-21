@@ -56,9 +56,11 @@ export async function isAuthed(): Promise<boolean> {
   try {
     await apiFetch('/auth/me');
     return true;
-  } catch (e) {
-    const err = e as ApiError;
-    if (err.status === 401) return false;
-    throw e;
+  } catch {
+    // Любая ошибка (401, 5xx, ECONNREFUSED пока api не поднялся) трактуется
+    // как «пользователь не залогинен» — страница отрисует экран логина,
+    // а не упадёт с 500. Это важно и для Railway healthcheck, и для
+    // плавного старта, когда web поднимается раньше api.
+    return false;
   }
 }

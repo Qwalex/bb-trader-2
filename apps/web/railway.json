@@ -17,7 +17,7 @@
     "startCommand": "pnpm start",
     "numReplicas": 1,
     "restartPolicyType": "ON_FAILURE",
-    "healthcheckPath": "/login",
+    "healthcheckPath": "/api/health",
     "healthcheckTimeout": 30
   }
 }
