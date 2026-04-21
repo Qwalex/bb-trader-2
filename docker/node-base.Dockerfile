@@ -12,7 +12,9 @@
 ARG NODE_VERSION=22-alpine
 
 FROM node:${NODE_VERSION} AS base
-ENV PNPM_HOME=/pnpm PATH=$PNPM_HOME:$PATH
+# Две строки — BuildKit иначе ругается UndefinedVar на $PNPM_HOME в той же ENV.
+ENV PNPM_HOME=/pnpm
+ENV PATH="/pnpm:$PATH"
 RUN corepack enable
 
 # -------- deps & build -----------------------------------------------------
@@ -51,15 +53,18 @@ RUN pnpm --filter "${APP_NAME}..." build
 FROM base AS runner
 ARG APP_NAME
 ARG APP_DIR
-WORKDIR /app
 ENV NODE_ENV=production
 
 # Копируем deploy-слепок, чтобы в финальном образе не было dev-deps и
 # лишних пакетов (экономия RAM и времени старта).
+# Важно: `pnpm deploy` должен выполняться из корня workspace (`/repo`),
+# иначе cwd остаётся пустым `/app` и pnpm печатает «No projects found in "/app"».
 COPY --from=builder /repo /repo
+WORKDIR /repo
 RUN pnpm --filter "${APP_NAME}" --prod deploy /app \
  && rm -rf /repo
 
+WORKDIR /app
 # Next.js служит через `next start`; остальные — через `node dist/main.js`.
 # Railway прокидывает PORT; код читает его сам.
 CMD ["pnpm", "start"]
