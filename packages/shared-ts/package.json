@@ -26,6 +26,11 @@
       "import": "./dist/enums.js",
       "default": "./dist/enums.js"
     },
+    "./enums.js": {
+      "types": "./dist/enums.d.ts",
+      "import": "./dist/enums.js",
+      "default": "./dist/enums.js"
+    },
     "./log-sanitize": {
       "types": "./dist/log-sanitize.d.ts",
       "import": "./dist/log-sanitize.js",

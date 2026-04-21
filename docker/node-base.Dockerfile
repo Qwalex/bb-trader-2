@@ -47,7 +47,10 @@ ENV DATABASE_URL="postgresql://build:build@localhost:5432/build?schema=public"
 RUN pnpm --filter @repo/shared-prisma exec prisma generate
 
 # Билдим целевой сервис и все его transitive deps в workspace.
-RUN pnpm --filter "${APP_NAME}..." build
+# Удаляем tsconfig.tsbuildinfo из контекста: если файл попал в образ, tsc с incremental
+# может не пересобрать dist при отсутствии выходных .js — ломается следующий пакет в графе.
+RUN find /repo/packages /repo/apps -name 'tsconfig.tsbuildinfo' -delete 2>/dev/null || true \
+ && pnpm --filter "${APP_NAME}..." build
 
 # -------- runtime ----------------------------------------------------------
 FROM base AS runner

@@ -12,6 +12,8 @@ build/
 .next/
 out/
 .turbo/
+# TypeScript incremental — нельзя коммитить: в Docker без dist tsc «успешно» ничего не эмитит.
+**/tsconfig.tsbuildinfo
 
 # Python
 __pycache__/
