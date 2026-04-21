@@ -6,7 +6,6 @@ FROM python:3.12-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    UV_SYSTEM_PYTHON=1 \
     UV_LINK_MODE=copy
 
 RUN apt-get update \
@@ -21,8 +20,11 @@ COPY apps/userbot/pyproject.toml apps/userbot/uv.lock* ./
 
 RUN uv sync --frozen --no-dev || uv sync --no-dev
 
-COPY apps/userbot/src ./src
+# Venv-интерпретатор становится `python` по умолчанию.
+# PATH prepend — чтобы `python -m bb_userbot.main` брал его, а не системный.
+ENV PATH="/app/.venv/bin:$PATH" \
+    PYTHONPATH=/app/src
 
-ENV PYTHONPATH=/app/src
+COPY apps/userbot/src ./src
 
 CMD ["python", "-m", "bb_userbot.main"]

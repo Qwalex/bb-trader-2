@@ -361,6 +361,8 @@ curl -i https://<api-domain>.up.railway.app/auth/me
 
 **Билд `userbot` падает с `runc run failed: container process is already dead` на строке `COPY apps/userbot/...`** → Railway заворачивает «файла нет в build context» в общий runc-error. Проверь `git check-ignore -v apps/userbot/pyproject.toml apps/userbot/uv.lock` — если хоть один из них игнорируется, Railway его не получит. В репе специально **убрали** `.python-version` из `.gitignore`; если кто-то вернёт — Dockerfile всё равно не должен его требовать (`FROM python:3.12-slim` уже фиксирует версию). Решение: закоммить недостающие файлы и убедись, что они в git.
 
+**`userbot` крашится в рантайме с `ModuleNotFoundError: No module named 'structlog'` (или любая другая зависимость)** → `uv sync` ставит зависимости в venv `/app/.venv`, а команда запуска вызывает **системный** `python` без пакетов. В Dockerfile обязательно должен быть `ENV PATH="/app/.venv/bin:$PATH"` **после** `uv sync`, иначе `python -m bb_userbot.main` возьмёт не тот интерпретатор. Альтернатива — запускать через `uv run python -m bb_userbot.main` (медленнее старт, но тоже работает).
+
 ---
 
 ## Откат
