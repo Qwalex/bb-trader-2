@@ -347,6 +347,8 @@ curl -i https://<api-domain>.up.railway.app/auth/me
 
 **CORS ошибка в браузере** → `API_CORS_ORIGINS` у api не содержит домен `web`. Переменная — comma-separated список, `https://` обязателен.
 
+**`userbot` в логах `UndefinedTableError: relation "UserbotSession" does not exist`** → в Postgres, к которому подключается `DATABASE_URL`, **не применены миграции Prisma**. Таблица появляется только после `prisma migrate deploy` (см. [часть 6](#часть-6-применить-миграции-бд)). Убедись, что у `userbot` тот же `DATABASE_URL`, что у остальных сервисов (референс `${{Postgres.DATABASE_URL}}`), а не пустая/другая БД.
+
 **`userbot` крутит QR-логин в бесконечности** → не пришли `TELEGRAM_USERBOT_API_ID/HASH` или пришли с бот-API (это разные сущности!). Проверить на my.telegram.org.
 
 **Railway пересобирает весь мир на каждый коммит** → `watchPatterns` не подхватился. Проверь, что `apps/<svc>/railway.json` в git и что поле **Config-as-code Path** в Railway UI → Settings указывает на этот файл.
