@@ -371,6 +371,8 @@ curl -i https://<api-domain>.up.railway.app/auth/me
 
 **`userbot` крашится в рантайме с `ModuleNotFoundError: No module named 'structlog'` (или любая другая зависимость)** → `uv sync` ставит зависимости в venv `/app/.venv`, а команда запуска вызывает **системный** `python` без пакетов. В Dockerfile обязательно должен быть `ENV PATH="/app/.venv/bin:$PATH"` **после** `uv sync`, иначе `python -m bb_userbot.main` возьмёт не тот интерпретатор. Альтернатива — запускать через `uv run python -m bb_userbot.main` (медленнее старт, но тоже работает).
 
+**Docker build: `shared-queue` / `shared-ts` падают с TS2307 «Cannot find module `@repo/shared-ts`»** → в git не должны лежать **`tsconfig.tsbuildinfo`** при `incremental: true`: в образе без `dist` tsc может «успешно» завершиться и не сгенерировать выход — следующий пакет не резолвит типы. В репе они в `.gitignore`, перед билдом в Dockerfile они удаляются; локально не коммить эти файлы.
+
 **Node-сервис крашится на старте с `No projects found in /app`** → это ошибка pnpm, когда он не находит workspace. В рантайм-контейнере Node-сервиса лежит только один задеплоенный app (`pnpm deploy` кладёт в `/app` уже готовый self-contained артефакт без остального монорепо). Значит `startCommand` должен быть просто `pnpm start`, а **не** `pnpm --filter @app/... start` — фильтр в `/app` искать нечего. У каждого app-пакета в `package.json` есть свой `"start": ...` скрипт.
 
 ---
