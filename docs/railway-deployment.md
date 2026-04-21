@@ -119,9 +119,13 @@ Internal DNS: каждый сервис доступен внутри проек
 
 Открываем **каждый** сервис → **Variables** → **Raw Editor** и вставляем свой блок. Shared-переменные уже унаследованы, добавляем только специфичные.
 
+> **Важно про `APP_NAME` / `APP_DIR`.** Все 4 Node-сервиса собираются из одного общего `docker/node-base.Dockerfile`. Чтобы он понял, что именно билдить, он читает `ARG APP_NAME` / `ARG APP_DIR`. Railway **игнорирует `buildArgs` в `railway.json`** — единственный способ их задать — через Service Variables. Railway автоматически пробрасывает переменные сервиса в build stage, если в Dockerfile есть соответствующий `ARG` (у нас есть).
+
 ### `api`
 
 ```env
+APP_NAME=@app/api
+APP_DIR=apps/api
 API_PORT=3001
 API_CORS_ORIGINS=https://<твой-web-домен>.up.railway.app
 ```
@@ -131,6 +135,8 @@ API_CORS_ORIGINS=https://<твой-web-домен>.up.railway.app
 ### `web`
 
 ```env
+APP_NAME=@app/web
+APP_DIR=apps/web
 API_INTERNAL_URL=http://api.railway.internal:3001
 NEXT_PUBLIC_TELEGRAM_BOT_USERNAME=<имя_твоего_бота_без_@>
 NEXT_PUBLIC_BRAND_NAME=bb-trader
@@ -148,9 +154,13 @@ USERBOT_POLL_INTERVAL_MS=2000
 
 API id/hash получаются **один раз** на [my.telegram.org](https://my.telegram.org) → API Development tools. Это НЕ бот-токен, это МТProto-креды для юзер-сессии.
 
+`userbot` собирается отдельным `docker/userbot.Dockerfile` и не требует `APP_NAME`/`APP_DIR`.
+
 ### `classifier`
 
 ```env
+APP_NAME=@app/classifier
+APP_DIR=apps/classifier
 CLASSIFIER_POLL_INTERVAL_MS=1000
 CLASSIFIER_BATCH_SIZE=10
 ```
@@ -158,6 +168,8 @@ CLASSIFIER_BATCH_SIZE=10
 ### `trader`
 
 ```env
+APP_NAME=@app/trader
+APP_DIR=apps/trader
 POLL_CABINET_POSITIONS_CRON=*/30 * * * * *
 TRADER_SIGNAL_CONCURRENCY=2
 ```

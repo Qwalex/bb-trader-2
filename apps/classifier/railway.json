@@ -3,10 +3,6 @@
   "build": {
     "builder": "DOCKERFILE",
     "dockerfilePath": "docker/node-base.Dockerfile",
-    "buildArgs": {
-      "APP_NAME": "@app/classifier",
-      "APP_DIR": "apps/classifier"
-    },
     "watchPatterns": [
       "apps/classifier/**",
       "packages/**",

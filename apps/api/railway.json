@@ -3,10 +3,6 @@
   "build": {
     "builder": "DOCKERFILE",
     "dockerfilePath": "docker/node-base.Dockerfile",
-    "buildArgs": {
-      "APP_NAME": "@app/api",
-      "APP_DIR": "apps/api"
-    },
     "watchPatterns": [
       "apps/api/**",
       "packages/**",

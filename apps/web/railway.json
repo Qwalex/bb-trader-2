@@ -3,10 +3,6 @@
   "build": {
     "builder": "DOCKERFILE",
     "dockerfilePath": "docker/node-base.Dockerfile",
-    "buildArgs": {
-      "APP_NAME": "@app/web",
-      "APP_DIR": "apps/web"
-    },
     "watchPatterns": [
       "apps/web/**",
       "packages/shared-ts/**",
