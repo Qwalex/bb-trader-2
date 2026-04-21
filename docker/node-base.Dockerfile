@@ -31,8 +31,7 @@ COPY apps/classifier/package.json apps/classifier/package.json
 COPY apps/trader/package.json apps/trader/package.json
 COPY apps/web/package.json apps/web/package.json
 
-RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
-    pnpm install --frozen-lockfile
+RUN pnpm install --frozen-lockfile
 
 # Теперь исходники.
 COPY packages packages

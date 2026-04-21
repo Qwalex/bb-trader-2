@@ -338,6 +338,8 @@ curl -i https://<api-domain>.up.railway.app/auth/me
 
 **`trader` пишет `cabinet verify failed: invalid api key`** → ключи Bybit созданы под другой Network (mainnet-ключом нельзя ходить в testnet API). Создай ключ на нужной странице и перепривяжи.
 
+**Билд падает с `flag '--mount=type=cache,...' is missing the cacheKey prefix from its id`** → кто-то добавил в Dockerfile `RUN --mount=type=cache,id=...`. Railway принимает cache mounts только в формате `id=s/<service-id>-<target>,target=<target>` и **не разрешает** ARG/ENV в id ([docs](https://docs.railway.com/guides/dockerfiles#cache-mounts)). У нас один общий `docker/node-base.Dockerfile` на 4 сервиса, поэтому hardcoded `service-id` туда не вписать. Решение: не использовать `--mount=type=cache` — обычный Docker layer cache уже покрывает кейс «lockfile не менялся». Если реально упираешься в билд-время — делай per-service Dockerfile с hardcoded id, а не общий.
+
 ---
 
 ## Откат

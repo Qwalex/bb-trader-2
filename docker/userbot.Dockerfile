@@ -19,8 +19,7 @@ WORKDIR /app
 
 COPY apps/userbot/pyproject.toml apps/userbot/uv.lock* apps/userbot/.python-version ./
 
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev || uv sync --no-dev
+RUN uv sync --frozen --no-dev || uv sync --no-dev
 
 COPY apps/userbot/src ./src
 
