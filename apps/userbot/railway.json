@@ -8,7 +8,7 @@
     ]
   },
   "deploy": {
-    "startCommand": "python -m bb_userbot.main",
+    "startCommand": "/app/.venv/bin/python -m bb_userbot.main",
     "numReplicas": 1,
     "restartPolicyType": "ON_FAILURE"
   }

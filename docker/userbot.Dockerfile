@@ -18,13 +18,15 @@ WORKDIR /app
 
 COPY apps/userbot/pyproject.toml apps/userbot/uv.lock* ./
 
-RUN uv sync --frozen --no-dev || uv sync --no-dev
+RUN uv sync --frozen --no-dev || uv sync --no-dev \
+ && /app/.venv/bin/python -c "import structlog"
 
-# Venv-интерпретатор становится `python` по умолчанию.
-# PATH prepend — чтобы `python -m bb_userbot.main` брал его, а не системный.
+# PATH — для отладки и на случай интерактивного shell; в рантайме используем
+# абсолютный путь к venv-python, иначе Railway `startCommand: python ...` может
+# вызвать системный /usr/local/bin/python без пакетов из uv.
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONPATH=/app/src
 
 COPY apps/userbot/src ./src
 
-CMD ["python", "-m", "bb_userbot.main"]
+CMD ["/app/.venv/bin/python", "-m", "bb_userbot.main"]
