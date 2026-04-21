@@ -17,7 +17,6 @@ out/
 __pycache__/
 *.py[cod]
 .venv/
-.python-version
 *.egg-info/
 
 # Prisma

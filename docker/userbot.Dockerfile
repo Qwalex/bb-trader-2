@@ -17,7 +17,7 @@ RUN pip install --no-cache-dir uv==0.5.18
 
 WORKDIR /app
 
-COPY apps/userbot/pyproject.toml apps/userbot/uv.lock* apps/userbot/.python-version ./
+COPY apps/userbot/pyproject.toml apps/userbot/uv.lock* ./
 
 RUN uv sync --frozen --no-dev || uv sync --no-dev
 
