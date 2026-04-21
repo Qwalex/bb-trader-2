@@ -6,6 +6,7 @@ import logging
 import sys
 
 import structlog
+from structlog.types import EventDict, WrappedLogger
 
 _SECRET_SUBSTRINGS = (
     "session_string",
@@ -19,7 +20,7 @@ _SECRET_SUBSTRINGS = (
 )
 
 
-def _mask_secrets(_logger: object, _method: str, event_dict: dict) -> dict:  # type: ignore[type-arg]
+def _mask_secrets(_logger: WrappedLogger, _method: str, event_dict: EventDict) -> EventDict:
     for key in list(event_dict.keys()):
         lower_key = key.lower()
         if any(s.lower() in lower_key for s in _SECRET_SUBSTRINGS):

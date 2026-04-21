@@ -11,11 +11,11 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && prisma generate",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate dev",
-    "db:migrate:deploy": "prisma migrate deploy",
-    "db:studio": "prisma studio",
-    "db:validate": "prisma validate",
+    "db:generate": "dotenv -e ../../.env -- prisma generate",
+    "db:migrate": "dotenv -e ../../.env -- prisma migrate dev",
+    "db:migrate:deploy": "dotenv -e ../../.env -- prisma migrate deploy",
+    "db:studio": "dotenv -e ../../.env -- prisma studio",
+    "db:validate": "dotenv -e ../../.env -- prisma validate",
     "clean": "rm -rf dist node_modules/.prisma"
   },
   "dependencies": {
@@ -23,6 +23,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
+    "dotenv-cli": "^8.0.0",
     "prisma": "^6.1.0",
     "typescript": "^5.7.3"
   }

@@ -5,9 +5,9 @@
   "description": "Python+Telethon userbot. pnpm-scripts просто вызывают uv/python.",
   "scripts": {
     "dev": "uv run python -m bb_userbot.main",
-    "build": "echo 'No build needed for Python' && exit 0",
-    "typecheck": "uv run mypy src/bb_userbot",
-    "lint": "uv run ruff check src/bb_userbot",
-    "format": "uv run ruff format src/bb_userbot"
+    "build": "node -e \"process.exit(0)\"",
+    "typecheck": "node scripts/uv-optional.mjs mypy src/bb_userbot",
+    "lint": "node scripts/uv-optional.mjs ruff check src/bb_userbot",
+    "format": "node scripts/uv-optional.mjs ruff format src/bb_userbot"
   }
 }

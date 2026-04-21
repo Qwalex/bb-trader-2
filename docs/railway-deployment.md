@@ -1,78 +1,357 @@
-# Railway deployment
+# Railway deployment — пошаговый гайд
 
-Один git-репо, 5 сервисов на Railway.
+Один git-репозиторий, 5 сервисов + managed Postgres в одном Railway-проекте. Всё описано в `apps/<svc>/railway.json` (Config-as-code), но у первой настройки есть ~15 кликов в UI — их и описываем.
 
-## Сервисы
+## Что получим в итоге
 
-| Service | Root Directory | Dockerfile | Railway.json |
-|---|---|---|---|
-| `api`        | `apps/api`        | `docker/node-base.Dockerfile` | `apps/api/railway.json` |
-| `classifier` | `apps/classifier` | `docker/node-base.Dockerfile` | `apps/classifier/railway.json` |
-| `trader`     | `apps/trader`     | `docker/node-base.Dockerfile` | `apps/trader/railway.json` |
-| `web`        | `apps/web`        | `docker/node-base.Dockerfile` | `apps/web/railway.json` |
-| `userbot`    | `apps/userbot`    | `docker/userbot.Dockerfile`   | `apps/userbot/railway.json` |
-
-Плюс managed Postgres (Railway `PostgreSQL`-плагин).
-
-## Как это работает
-
-1. В каждом сервисе в Railway UI выставлен **Root Directory = `.`** (не путь к
-   приложению!). Мы пробрасываем весь репозиторий как build-context — иначе
-   Dockerfile не сможет скопировать `packages/*` и `pnpm-lock.yaml`.
-2. `Config-as-code` включён, Railway.json лежит в `apps/<name>/railway.json`.
-   Из него Railway берёт `dockerfilePath` (ссылка внутри build-context’а) и
-   `buildArgs` для `APP_NAME` / `APP_DIR`.
-3. `watchPatterns` гарантирует, что изменения в чужом сервисе не перезапустят
-   этот (например, правка `apps/web` не пересобирает `api`).
-4. `docker/node-base.Dockerfile` — общий multi-stage билд для четырёх
-   TypeScript-сервисов. На финальной стадии он делает
-   `pnpm deploy --prod /app`, чтобы в рантайме оказались только runtime-deps
-   нужного сервиса — это даёт минимальный RAM на старте.
-
-## Секреты и ENV
-
-Все переменные централизованы в `.env.example`. На Railway они задаются на
-**уровне Project** (shared) и переопределяются per-service там, где нужно.
-
-Обязательные shared:
-
-- `DATABASE_URL` (Postgres plugin)
-- `APP_ENCRYPTION_KEY` (32 байта base64; НЕ ротировать без миграции)
-- `TELEGRAM_BOT_TOKEN`, `INITIAL_ADMIN_TELEGRAM_ID`
-- `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`
-- `SESSION_SECRET` (только api/web)
-
-Per-service:
-
-- `api`: `API_PORT=3001` (Railway проставит `PORT` сам, код читает оба), `API_CORS_ORIGINS`.
-- `web`: `API_INTERNAL_URL` (внутренний URL сервиса `api`), `NEXT_PUBLIC_TELEGRAM_BOT_USERNAME`.
-- `userbot`: `TELEGRAM_USERBOT_API_ID`, `TELEGRAM_USERBOT_API_HASH`.
-- `trader`: `POLL_CABINET_POSITIONS_CRON`.
-
-## Миграции БД
-
-Миграции применяем ВРУЧНУЮ или отдельной one-shot командой (чтобы не было race
-между одновременно стартующими сервисами):
-
-```bash
-# локально, против prod БД, после merge в main:
-pnpm --filter @repo/shared-prisma exec prisma migrate deploy
+```
+Railway project "bb-trader"
+├── Postgres            ← managed plugin (автогенерит DATABASE_URL)
+├── api                 ← NestJS REST, публичный домен
+├── web                 ← Next.js UI, публичный домен
+├── userbot             ← Python+Telethon, приватный
+├── classifier          ← Node worker, приватный
+└── trader              ← Node worker, приватный
 ```
 
-На Railway это можно повесить pre-deploy hook в сервисе `api` (через
-`releaseCommand`), но тогда ошибки миграции не уронят остальные сервисы.
+Публичные — те, к которым ходит браузер. Приватные общаются только внутри Railway-сети и с Telegram/Bybit/OpenRouter.
 
-## Проверка памяти
+## Обзор архитектуры деплоя
 
-После деплоя проверьте метрики Railway:
+| Service    | Root Directory | Dockerfile                     | Railway.json                     |
+|------------|----------------|--------------------------------|----------------------------------|
+| `api`      | **`/`**        | `docker/node-base.Dockerfile`  | `apps/api/railway.json`          |
+| `classifier` | **`/`**      | `docker/node-base.Dockerfile`  | `apps/classifier/railway.json`   |
+| `trader`   | **`/`**        | `docker/node-base.Dockerfile`  | `apps/trader/railway.json`       |
+| `web`      | **`/`**        | `docker/node-base.Dockerfile`  | `apps/web/railway.json`          |
+| `userbot`  | **`/`**        | `docker/userbot.Dockerfile`    | `apps/userbot/railway.json`      |
 
-| Service | Ожидаемый RSS (idle) | Заметки |
+**Важно:** Root Directory у ВСЕХ сервисов = `/` (корень репозитория). Dockerfile сам копирует только нужное. Иначе в контекст не попадут `packages/*`, `pnpm-lock.yaml`, `tsconfig.base.json` — и Node-сервисы не соберутся.
+
+---
+
+## Часть 0. Предварительно — локально
+
+Убедись, что всё собирается и запускается локально:
+
+```bash
+# 1. Postgres
+pnpm docker:dev:up
+
+# 2. Secrets для .env
+echo "DATABASE_URL=postgresql://bb:bb@localhost:5432/bb?schema=public" > .env
+echo "APP_ENCRYPTION_KEY=$(openssl rand -base64 32)"       >> .env
+echo "SESSION_SECRET=$(openssl rand -base64 48)"           >> .env
+
+# 3. Миграции и генерация
+pnpm install
+pnpm db:migrate:deploy   # применит prisma/migrations/*
+pnpm db:generate
+
+# 4. Типы
+pnpm -r typecheck
+```
+
+Сохрани `.env` в password-manager — на Railway понадобятся те же значения (особенно `APP_ENCRYPTION_KEY`, его нельзя генерить заново — расшифровка сохранённых секретов сломается).
+
+---
+
+## Часть 1. Создать Railway-проект
+
+1. [railway.com](https://railway.com) → **New Project** → **Empty Project**. Название: `bb-trader`.
+2. В проекте → **+ New** → **Database** → **PostgreSQL**. Дождаться, пока плагин поднимется (зелёный статус).
+3. Открыть сервис `Postgres` → вкладка **Variables** → убедиться, что есть `DATABASE_URL` (плагин сам её генерит).
+4. (Опционально, но рекомендую) в `Postgres` → **Settings** → включить **Serverless** = OFF. Иначе БД засыпает и первые запросы после простоя отдают timeout.
+
+---
+
+## Часть 2. Shared-переменные проекта
+
+Переменные на уровне **Project** (шарятся всеми сервисами), а не per-service. Railway → проект → **Variables** (вкладка на уровне проекта, не сервиса).
+
+| Key | Value | Комментарий |
 |---|---|---|
-| userbot (на 1 юзера) | ~80–100 MB | плюс ~40–60 MB на каждую следующую UserbotSession |
-| classifier | ~120 MB | OpenRouter-клиент без SDK, pino-логгер |
-| trader | ~150 MB | bybit-api + N пулов соединений |
-| api | ~180–220 MB | NestJS + Fastify |
-| web | ~220–260 MB | Next.js standalone |
+| `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` | ссылка-референс на плагин |
+| `APP_ENCRYPTION_KEY` | тот же, что локально | 32 байта в base64 |
+| `SESSION_SECRET` | тот же, что локально | >=48 символов |
+| `TELEGRAM_BOT_TOKEN` | из @BotFather | для HMAC-проверки Login-виджета |
+| `INITIAL_ADMIN_TELEGRAM_ID` | твой Telegram user id | первый вход = admin |
+| `OPENROUTER_API_KEY` | из openrouter.ai | |
+| `OPENROUTER_MODEL` | напр. `anthropic/claude-3.5-sonnet` | |
+| `NODE_ENV` | `production` | |
+| `LOG_LEVEL` | `info` | |
 
-Ориентир: сумма на 1 активного юзера — **~800–900 MB RSS** (против 2+ GB в
-монолите `bb-trader`).
+Синтаксис `${{Postgres.DATABASE_URL}}` — это Railway-референс: при перегенерации пароля у БД все сервисы получат новое значение автоматически.
+
+---
+
+## Часть 3. Создать 5 сервисов
+
+Для каждого сервиса повторяем одно и то же:
+
+1. В проекте → **+ New** → **GitHub Repo** → выбрать `bb-trade-transformation`.
+2. Название сервиса задать ровно как в таблице (`api` / `classifier` / `trader` / `web` / `userbot`) — от этого зависит внутренний DNS (см. ниже).
+3. Открыть созданный сервис → **Settings**:
+   - **Source Repo**: ветка `main` (или твоя dev-ветка).
+   - **Root Directory**: оставить `/` (или поле пустым).
+   - **Config-as-code**: указать `apps/<name>/railway.json`.
+     _Пример для api: `apps/api/railway.json`. Railway сразу подтянет оттуда Dockerfile, buildArgs, watchPatterns._
+   - **Builder**: выставится в `DOCKERFILE` автоматически из railway.json.
+4. **Deploy** — запустится первый билд. Он упадёт, пока нет per-service env (см. часть 4) — это нормально.
+
+### Per-service настройки сети
+
+Сразу на вкладке **Settings → Networking**:
+
+| Service | Public Networking | Private Networking |
+|---|---|---|
+| `api`        | **Generate Domain** (появится `api-production-xxxx.up.railway.app`) | on |
+| `web`        | **Generate Domain** | on |
+| `trader`     | off | on |
+| `classifier` | off | on |
+| `userbot`    | off | on |
+
+Internal DNS: каждый сервис доступен внутри проекта по `http://<service-name>.railway.internal:<PORT>`. Например, web достучится до api по `http://api.railway.internal:3001`.
+
+---
+
+## Часть 4. Per-service переменные
+
+Открываем **каждый** сервис → **Variables** → **Raw Editor** и вставляем свой блок. Shared-переменные уже унаследованы, добавляем только специфичные.
+
+### `api`
+
+```env
+API_PORT=3001
+API_CORS_ORIGINS=https://<твой-web-домен>.up.railway.app
+```
+
+После того как `web` получит публичный домен — впиши его сюда и передеплой api, иначе браузер получит CORS-ошибку.
+
+### `web`
+
+```env
+API_INTERNAL_URL=http://api.railway.internal:3001
+NEXT_PUBLIC_TELEGRAM_BOT_USERNAME=<имя_твоего_бота_без_@>
+NEXT_PUBLIC_BRAND_NAME=bb-trader
+```
+
+`API_INTERNAL_URL` — это для server-side fetch из Next.js к api. Клиент в браузер этот URL никогда не увидит.
+
+### `userbot`
+
+```env
+TELEGRAM_USERBOT_API_ID=<api_id_с_my.telegram.org>
+TELEGRAM_USERBOT_API_HASH=<api_hash_с_my.telegram.org>
+USERBOT_POLL_INTERVAL_MS=2000
+```
+
+API id/hash получаются **один раз** на [my.telegram.org](https://my.telegram.org) → API Development tools. Это НЕ бот-токен, это МТProto-креды для юзер-сессии.
+
+### `classifier`
+
+```env
+CLASSIFIER_POLL_INTERVAL_MS=1000
+CLASSIFIER_BATCH_SIZE=10
+```
+
+### `trader`
+
+```env
+POLL_CABINET_POSITIONS_CRON=*/30 * * * * *
+TRADER_SIGNAL_CONCURRENCY=2
+```
+
+---
+
+## Часть 5. Настроить Telegram Login Widget
+
+Login-виджет работает только с доменом, заранее зарегистрированным у бота:
+
+1. В Telegram открыть `@BotFather` → `/mybots` → выбрать своего бота → **Bot Settings** → **Domain**.
+2. Ввести домен web-сервиса: `<web-xxx>.up.railway.app` (без `https://`).
+3. Если поменяешь домен потом — обнови здесь, иначе виджет молча не покажется.
+
+---
+
+## Часть 6. Применить миграции БД
+
+Первый раз — вручную против Railway-Postgres, не автоматически на Railway (чтобы не ловить race между стартующими сервисами):
+
+```bash
+# Railway Postgres → Variables → скопировать DATABASE_URL (с реальным паролем).
+# Временно подменить локальный .env на prod-версию:
+cp .env .env.backup
+echo "DATABASE_URL=postgresql://postgres:...@containers-us-west-NN.railway.app:NNNN/railway" > .env
+# (остальные ключи для миграций не нужны)
+
+pnpm db:migrate:deploy
+
+# Вернуть локальный .env:
+mv .env.backup .env
+```
+
+Альтернативно, если не хочется трогать `.env`, можно запустить `prisma` напрямую с инлайновой переменной:
+
+```bash
+DATABASE_URL="postgresql://..." \
+  pnpm --filter @repo/shared-prisma exec prisma migrate deploy
+```
+
+Проверить:
+
+```bash
+pnpm --filter @repo/shared-prisma exec prisma studio
+# откроется http://localhost:5555 — видны пустые таблицы User, Cabinet, и т.д.
+```
+
+---
+
+## Часть 7. Первый деплой и проверка
+
+1. Railway → каждый сервис → **Deployments** → дождаться зелёного **Active** у всех пяти.
+2. Порядок запуска не важен — сервисы независимы. Если какой-то failed — открой **Logs**, скорее всего не хватает env-переменной.
+3. Сразу после `Active` проверить сервисы в таком порядке:
+
+**`api`** — ожидается 401 (нет сессии) на `/auth/me`:
+
+```bash
+curl -i https://<api-domain>.up.railway.app/auth/me
+# HTTP/2 401
+```
+
+**`web`** — открыть `https://<web-domain>.up.railway.app/login`:
+- Должен отрендериться Telegram Login-виджет.
+- Если виджет не появился → домен не зарегистрирован в BotFather (часть 5).
+
+**Login flow:**
+- Нажать кнопку "Log in with Telegram", подтвердить.
+- Браузер редиректит на `/`, показывается Dashboard с ролью **admin** (благодаря `INITIAL_ADMIN_TELEGRAM_ID`).
+
+**`userbot`** — пока нет сессии, логи должны показать:
+
+```
+{"level":"info","service":"userbot","msg":"no active sessions, idle"}
+```
+
+**`trader`** — в логах первый cron-tick:
+
+```
+{"level":"info","service":"trader","msg":"poll.cabinet_positions: no enabled cabinets"}
+```
+
+**`classifier`** — в логах:
+
+```
+{"level":"info","service":"classifier","msg":"ingest poll: 0 events"}
+```
+
+---
+
+## Часть 8. Создать первый кабинет и проверить торговую петлю
+
+В UI (`/cabinets`):
+
+1. **+ Новый кабинет** → slug `test`, network `testnet` (сначала на testnet!). Создать.
+2. Открыть кабинет → ввести Bybit **testnet** API key/secret.
+3. В `trader` логах через ~30 сек: `cabinet verify ok cabinetId=...`. Если `verify failed` — ключи с неправильной сетью или без нужных прав (Spot+Derivatives read/trade).
+4. Dashboard → выбрать этот кабинет в селекторе → появится блок с балансом (может быть 0, если testnet-кошелёк пустой — пополни через [testnet.bybit.com](https://testnet.bybit.com)).
+
+**Userbot login:**
+
+1. `/userbot` → **Залогиниться (QR)**.
+2. Через ~2 сек появится QR-картинка.
+3. Telegram на телефоне → **Settings → Devices → Link Desktop Device** → сканируй.
+4. Статус меняется на `connected`, приходит первый `ping` event.
+
+**Подписка на канал:**
+
+1. `/userbot` → **+ Добавить канал** → `chatId` (получается через [@userinfobot](https://t.me/userinfobot) или через web-версию ТГ — URL вида `t.me/c/1234567890/...` = chatId `-1001234567890`).
+2. Включить канал. В логах `userbot`: `subscribed chatId=...`.
+3. Отправить в этом канале тестовое сообщение — в `classifier` логах должен появиться `IngestEvent processed`.
+
+---
+
+## Часть 9. Пост-деплой чек-лист
+
+- [ ] На каждом сервисе **Metrics → Memory** показывает RSS в пределах таблицы (см. ниже).
+- [ ] В `api` нет стектрейсов без контекста (искать `"level":50`).
+- [ ] На вкладке **Networking** у `api`/`web` включён **HTTPS redirect**.
+- [ ] Cкопирован доступ к Postgres-бэкапам (Railway → Postgres → **Backups** → снапшоты раз в сутки по умолчанию у Pro).
+- [ ] В `web` → Variables → `NEXT_PUBLIC_TELEGRAM_BOT_USERNAME` совпадает с реальным username бота.
+- [ ] У бота в BotFather зарегистрирован домен web-сервиса.
+
+### Ожидаемое потребление памяти
+
+| Service | RSS idle | RSS под нагрузкой | Заметки |
+|---|---|---|---|
+| `userbot` (1 юзер) | ~80–100 MB | +40–60 MB на каждого доп. юзера | Telethon + cryptg |
+| `classifier` | ~120 MB | +30 MB под LLM-запросом | без ai-sdk, fetch напрямую в OpenRouter |
+| `trader` | ~150 MB | +20 MB на активный кабинет | bybit-api + Prisma |
+| `api` | ~180–220 MB | до 300 MB | NestJS + Fastify |
+| `web` | ~220–260 MB | ~300 MB | Next.js standalone |
+
+**Суммарно на 1 юзера ≈ 800–900 MB RSS**, против 2+ GB старого монолита. Railway Hobby-план ($5/мес, 512 MB/сервис, **не хватит** на api/web) — нужно либо Developer ($10/мес, 8 GB на сервис), либо Pro.
+
+---
+
+## Постоянный ритм разработки
+
+После первого деплоя жизнь простая:
+
+1. `git push origin main` (или PR → merge).
+2. Railway триггерит билд только тех сервисов, чьи `watchPatterns` совпали с изменёнными файлами:
+   - правка в `apps/trader/**` → пересборка только `trader`.
+   - правка в `packages/**` → пересборка **всех Node-сервисов** (они делят `shared-*`).
+   - правка в `apps/userbot/**` → пересборка только `userbot`.
+3. Если правил Prisma-schema — ПЕРЕД мержем в main:
+
+   ```bash
+   pnpm db:migrate   # создать новую миграцию локально
+   git add packages/shared-prisma/prisma/migrations
+   git commit -m "db: <что-поменял>"
+   ```
+
+   После мержа — **до** того, как сервисы перезапустятся:
+
+   ```bash
+   DATABASE_URL=<prod> pnpm --filter @repo/shared-prisma exec prisma migrate deploy
+   ```
+
+   Иначе новый код попадёт в runtime раньше миграции и уронит сервис.
+
+---
+
+## Частые грабли
+
+**«Dockerfile not found»** → в railway.json указан несуществующий `dockerfilePath`. Проверь, что в Git есть `docker/node-base.Dockerfile`, и что Railway смотрит на правильную ветку.
+
+**«Cannot find module '@repo/shared-prisma'» в рантайме** → забыл `pnpm --filter @repo/shared-prisma exec prisma generate` внутри Dockerfile (у нас это делается, но если меняли — проверь).
+
+**`api` стартует, но возвращает 500 на `/auth/telegram-login`** → не совпадает `TELEGRAM_BOT_TOKEN` с тем, что в BotFather для текущего домена.
+
+**CORS ошибка в браузере** → `API_CORS_ORIGINS` у api не содержит домен `web`. Переменная — comma-separated список, `https://` обязателен.
+
+**`userbot` крутит QR-логин в бесконечности** → не пришли `TELEGRAM_USERBOT_API_ID/HASH` или пришли с бот-API (это разные сущности!). Проверить на my.telegram.org.
+
+**Railway пересобирает весь мир на каждый коммит** → `watchPatterns` не подхватился. Проверь, что `apps/<svc>/railway.json` в git и что поле **Config-as-code Path** в Railway UI → Settings указывает на этот файл.
+
+**`trader` пишет `cabinet verify failed: invalid api key`** → ключи Bybit созданы под другой Network (mainnet-ключом нельзя ходить в testnet API). Создай ключ на нужной странице и перепривяжи.
+
+---
+
+## Откат
+
+У Railway встроенный rollback: **Deployments** → старый green deploy → **Redeploy**. Поднимется тот же образ с теми же env, которые были тогда. Данные в Postgres при этом НЕ откатываются — для этого нужно восстановить из бэкапа (Postgres plugin → Backups → Restore).
+
+Для БД-миграций одноразового отката в Prisma нет; если зарелизил миграцию и она сломала прод — пиши **forward-fix migration**, а не ручной `DROP COLUMN`.
+
+---
+
+## Что дальше
+
+- Автоматизация миграций: вместо ручного `migrate deploy` можно добавить **Release Command** в сервис `api` (Settings → Deploy → Pre-Deploy Command): `pnpm --filter @repo/shared-prisma exec prisma migrate deploy`. Тогда миграции применятся перед стартом api, а остальные сервисы потом.
+- Preview-окружения: Railway умеет деплоить каждый PR в отдельный env — под это понадобятся отдельные `APP_ENCRYPTION_KEY` и отдельная БД (копия через `pg_dump`).
+- Observability: Railway ограниченно показывает логи; если нужно больше — подключи Logtail / Better Stack (обе поддерживают syslog-форвард из Railway out-of-the-box).
+
+Когда будешь переходить с текущего `bb-trader` — см. `docs/cutover-plan.md`.
