@@ -65,6 +65,6 @@ RUN pnpm --filter "${APP_NAME}" --prod deploy /app \
  && rm -rf /repo
 
 WORKDIR /app
-# Next.js служит через `next start`; остальные — через `node dist/main.js`.
-# Railway прокидывает PORT; код читает его сам.
+# web: `pnpm start` → `node .next/standalone/server.js` (см. apps/web/package.json).
+# api/classifier/trader: `node dist/main.js`. Railway прокидывает PORT.
 CMD ["pnpm", "start"]

@@ -144,8 +144,8 @@ NEXT_PUBLIC_TELEGRAM_BOT_USERNAME=<имя_твоего_бота_без_@>
 NEXT_PUBLIC_BRAND_NAME=bb-trader
 ```
 
-- `PORT=3000` — аналогично api, фиксируем явно. `next start` сам читает `$PORT` и слушает на нём.
-- `API_INTERNAL_URL` — для server-side fetch из Next.js к api. Порт должен совпадать с `PORT` сервиса api. Клиент в браузер этот URL никогда не увидит.
+- `PORT=3000` — аналогично api, фиксируем явно. В проде web стартует через **standalone** (`node server.js` из `.next/standalone/…`), он тоже читает `$PORT`.
+- `API_INTERNAL_URL` — для server-side fetch и rewrites из Next.js к api. Хост **обязан** совпадать с **именем сервиса api в Railway** (как в списке сервисов проекта), например `http://api.railway.internal:3001`. Не подставляй произвольные имена вроде `appapi` — будет `getaddrinfo ENOTFOUND`. Порт должен совпадать с `PORT` сервиса api.
 
 ### `userbot`
 
@@ -357,7 +357,9 @@ curl -i https://<api-domain>.up.railway.app/auth/me
 
 **Билд падает с `pnpm: Unsupported package selector: {...}` на строке `pnpm --filter "${APP_NAME}..." build`** → `APP_NAME` не пробросилась в билд, `${APP_NAME}` = пустая строка, и pnpm получает фильтр `...` без имени пакета. Причина: Railway **игнорирует `buildArgs` в `railway.json`** ([docs](https://docs.railway.com/builds/dockerfiles#using-variables-at-build-time)). Пробрасывать билд-переменные надо через обычные Service Variables в UI — Railway сам подставит их в `ARG`, объявленные в Dockerfile. Решение: в **Variables** каждого Node-сервиса должны быть заданы `APP_NAME` (например `@app/api`) и `APP_DIR` (`apps/api`). Смотри раздел «Per-service переменные» выше.
 
-**Healthcheck failed у `api` / `web`, публичный домен отдаёт `Application failed to respond`** → сервис слушает не тот порт, куда Railway шлёт запросы. Railway автоматически инжектит `PORT` (случайный) и ждёт, что приложение привяжется именно к нему. Решение: в Variables сервиса явно задать `PORT=3001` для api и `PORT=3000` для web. Код api уже уважает `PORT` с приоритетом над `API_PORT`, Next.js (`next start`) уважает `$PORT` по умолчанию. Если после этого healthcheck всё ещё падает — проверь, что в логах api видно `api.ready { port: 3001 }` и что `API_CORS_ORIGINS` содержит домен web.
+**Healthcheck failed у `api` / `web`, публичный домен отдаёт `Application failed to respond`** → сервис слушает не тот порт, куда Railway шлёт запросы. Railway автоматически инжектит `PORT` (случайный) и ждёт, что приложение привяжется именно к нему. Решение: в Variables сервиса явно задать `PORT=3001` для api и `PORT=3000` для web. Код api уже уважает `PORT` с приоритетом над `API_PORT`, web в проде (standalone) тоже читает `$PORT`. Если после этого healthcheck всё ещё падает — проверь, что в логах api видно `api.ready { port: 3001 }` и что `API_CORS_ORIGINS` содержит домен web.
+
+**У `web` в логах `ENOTFOUND …railway.internal` при SSR / rewrites** → в `API_INTERNAL_URL` указан несуществующий хост. Внутренний DNS — это **`http://<имя-сервиса-в-Railway>.railway.internal:<PORT>`**, где `<имя-сервиса>` **точно** как в UI (часто `api`, а не имя репозитория или `appapi`). Порт — тот же, что в Variables у api (`PORT`, чаще всего `3001`).
 
 **Healthcheck отдаёт 401/500 хотя сервис запустился** → healthcheckPath указывает на закрытый guard'ом или зависящий от других сервисов endpoint. Railway считает успехом только 2xx. У нас:
 - `api` → `/health` (`HealthController`, без guard'ов и БД);

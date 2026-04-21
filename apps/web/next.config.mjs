@@ -1,3 +1,8 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
 /**
  * @type {import('next').NextConfig}
  *
@@ -8,6 +13,8 @@ const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   output: 'standalone',
+  /** Монорепо: корректный tracing и предсказуемый standalone-артефакт. */
+  outputFileTracingRoot: path.join(__dirname, '..', '..'),
   experimental: {
     optimizePackageImports: ['@repo/shared-ts'],
   },
