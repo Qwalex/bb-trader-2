@@ -93,8 +93,8 @@ async def upsert_userbot_channel(
 ) -> None:
     await pool.execute(
         """
-        INSERT INTO "UserbotChannel" ("userId", "chatId", title, username, enabled, "updatedAt")
-        VALUES ($1, $2, $3, $4, false, now())
+        INSERT INTO "UserbotChannel" (id, "userId", "chatId", title, username, enabled, "updatedAt")
+        VALUES (gen_random_uuid()::text, $1, $2, $3, $4, false, now())
         ON CONFLICT ("userId", "chatId") DO UPDATE SET
             title = EXCLUDED.title,
             username = EXCLUDED.username,
