@@ -28,7 +28,6 @@ async function proxy(req: NextRequest, path: string[]) {
     method,
     headers: copyHeaders(req),
     body: hasBody ? req.body : undefined,
-    duplex: hasBody ? 'half' : undefined,
     redirect: 'manual',
     cache: 'no-store',
   });
