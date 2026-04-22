@@ -34,3 +34,36 @@ export const UpdateCabinetChannelFilterDto = z.object({
   minLotBump: z.boolean().nullable().optional(),
 });
 export type UpdateCabinetChannelFilterDto = z.infer<typeof UpdateCabinetChannelFilterDto>;
+
+export const CabinetTelegramBotDto = z.object({
+  cabinetId: z.string(),
+  botUsername: z.string().nullable(),
+  signalChatId: z.string().nullable(),
+  logChatId: z.string().nullable(),
+  enabled: z.boolean(),
+  lastVerifiedAt: z.string().nullable(),
+  lastVerifyError: z.string().nullable(),
+  lastInboundAt: z.string().nullable(),
+  lastOutboundAt: z.string().nullable(),
+});
+export type CabinetTelegramBotDto = z.infer<typeof CabinetTelegramBotDto>;
+
+export const UpsertCabinetTelegramBotDto = z
+  .object({
+    botToken: z.string().trim().min(1).optional(),
+    signalChatId: z.string().trim().min(1).nullable().optional(),
+    logChatId: z.string().trim().min(1).nullable().optional(),
+    enabled: z.boolean().optional(),
+  })
+  .refine(
+    (v) =>
+      Object.values(v).some((x) => x !== undefined),
+    { message: 'nothing to update' },
+  );
+export type UpsertCabinetTelegramBotDto = z.infer<typeof UpsertCabinetTelegramBotDto>;
+
+export const VerifyCabinetTelegramBotDto = z.object({
+  verifySignalChatId: z.boolean().default(true),
+  verifyLogChatId: z.boolean().default(true),
+});
+export type VerifyCabinetTelegramBotDto = z.infer<typeof VerifyCabinetTelegramBotDto>;

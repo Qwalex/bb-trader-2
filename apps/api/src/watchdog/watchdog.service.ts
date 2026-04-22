@@ -3,6 +3,7 @@ import type { PrismaClient } from '@repo/shared-prisma';
 import { APP_CONFIG } from '../config.module.js';
 import type { AppConfig } from '../config.js';
 import { PRISMA } from '../prisma.module.js';
+import { CabinetBotService } from '../cabinet-bot/cabinet-bot.service.js';
 
 @Injectable()
 export class WatchdogService implements OnModuleInit, OnModuleDestroy {
@@ -11,6 +12,7 @@ export class WatchdogService implements OnModuleInit, OnModuleDestroy {
   constructor(
     @Inject(PRISMA) private readonly prisma: PrismaClient,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
+    private readonly cabinetBot: CabinetBotService,
   ) {}
 
   onModuleInit(): void {
@@ -29,7 +31,7 @@ export class WatchdogService implements OnModuleInit, OnModuleDestroy {
 
   async getPipelineSummary() {
     const now = Date.now();
-    const [ingestCounts, commandCounts, recalcCounts, stuckClassifying, stuckCommands, stuckRecalc] =
+    const [ingestCounts, commandCounts, recalcCounts, stuckClassifying, stuckCommands, stuckRecalc, cabinetBot] =
       await Promise.all([
         this.prisma.ingestEvent.groupBy({
           by: ['status'],
@@ -61,6 +63,7 @@ export class WatchdogService implements OnModuleInit, OnModuleDestroy {
             startedAt: { not: null, lt: new Date(now - this.config.WATCHDOG_RECALC_STUCK_MS) },
           },
         }),
+        this.cabinetBot.healthSummary(),
       ]);
 
     return {
@@ -72,6 +75,7 @@ export class WatchdogService implements OnModuleInit, OnModuleDestroy {
         userbotCommands: stuckCommands,
         recalcJobs: stuckRecalc,
       },
+      cabinetBot,
       checkedAt: new Date().toISOString(),
     };
   }
@@ -114,19 +118,23 @@ export class WatchdogService implements OnModuleInit, OnModuleDestroy {
         }),
       ]);
 
+      const delivered = await this.cabinetBot.flushCabinetLogDeliveries();
+
       const touched =
         reclaimedIngest.count + failedCommands.count + failedRecalc.count;
-      if (touched > 0) {
+      if (touched > 0 || delivered.sent > 0 || delivered.failed > 0) {
         await this.prisma.appLog.create({
           data: {
             level: 'warn',
             category: 'system',
             service: 'api',
-            message: 'watchdog reclaimed stuck pipeline items',
+            message: 'watchdog pipeline maintenance tick',
             payload: JSON.stringify({
               reclaimedIngest: reclaimedIngest.count,
               failedUserbotCommands: failedCommands.count,
               failedRecalcJobs: failedRecalc.count,
+              cabinetBotLogSent: delivered.sent,
+              cabinetBotLogFailed: delivered.failed,
             }),
           },
         });

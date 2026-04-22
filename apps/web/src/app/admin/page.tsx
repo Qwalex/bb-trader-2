@@ -15,6 +15,12 @@ interface PipelineSummary {
     userbotCommands: number;
     recalcJobs: number;
   };
+  cabinetBot: {
+    configuredBots: number;
+    enabledBots: number;
+    verifiedBots: number;
+    failedDeliveries: number;
+  };
   checkedAt: string;
 }
 

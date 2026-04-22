@@ -14,6 +14,9 @@ interface Cabinet {
   hasBybitKey: boolean;
   bybitKeyVerifiedAt: string | null;
   bybitKeyLastError: string | null;
+  hasCabinetBot: boolean;
+  cabinetBotVerifiedAt: string | null;
+  cabinetBotLastError: string | null;
 }
 
 interface Setting {
@@ -35,6 +38,18 @@ interface ChannelFilter {
   minLotBump: boolean | null;
 }
 
+interface CabinetBot {
+  cabinetId: string;
+  botUsername: string | null;
+  signalChatId: string | null;
+  logChatId: string | null;
+  enabled: boolean;
+  lastVerifiedAt: string | null;
+  lastVerifyError: string | null;
+  lastInboundAt: string | null;
+  lastOutboundAt: string | null;
+}
+
 export default async function CabinetPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   try {
@@ -54,9 +69,10 @@ export default async function CabinetPage({ params }: { params: Promise<{ id: st
   }
   if (!cabinet) notFound();
 
-  const [settings, channelFilters] = await Promise.all([
+  const [settings, channelFilters, cabinetBot] = await Promise.all([
     apiFetch<Setting[]>(`/cabinets/${id}/settings`),
     apiFetch<ChannelFilter[]>(`/cabinets/${id}/channel-filters`),
+    apiFetch<CabinetBot | null>(`/cabinets/${id}/cabinet-bot`),
   ]);
 
   return (
@@ -67,7 +83,12 @@ export default async function CabinetPage({ params }: { params: Promise<{ id: st
           {cabinet.displayName}{' '}
           <small style={{ color: 'var(--fg-dim)' }}>({cabinet.slug})</small>
         </h1>
-        <CabinetDetail cabinet={cabinet} initialSettings={settings} initialChannelFilters={channelFilters} />
+        <CabinetDetail
+          cabinet={cabinet}
+          initialSettings={settings}
+          initialChannelFilters={channelFilters}
+          initialCabinetBot={cabinetBot}
+        />
       </div>
     </>
   );

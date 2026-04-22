@@ -51,11 +51,12 @@ export class SignalFanoutService {
       return;
     }
 
+    const targetCabinetId = draft.targetCabinetId ?? input.onlyCabinetId;
     const cabinets = await prisma.cabinet.findMany({
       where: {
         ownerUserId: input.userId,
         enabled: true,
-        ...(input.onlyCabinetId ? { id: input.onlyCabinetId } : {}),
+        ...(targetCabinetId ? { id: targetCabinetId } : {}),
       },
       include: {
         settings: true,
@@ -88,7 +89,7 @@ export class SignalFanoutService {
       const channelFilter = filters.find((f) => f.userbotChannel.chatId === draft.sourceChatId);
 
       const hasExplicit = filters.some((f) => f.userbotChannel.chatId === draft.sourceChatId);
-      if (hasExplicit && !channelFilter) {
+      if (draft.sourceType !== 'cabinet_bot' && hasExplicit && !channelFilter) {
         await this.recordSkip(cabinet.id, draft.id, 'channel_disabled_for_cabinet');
         skippedCount += 1;
         continue;
@@ -162,7 +163,7 @@ export class SignalFanoutService {
                 takeProfits: draft.takeProfits,
                 leverage,
                 orderUsd: defaultOrderUsd,
-                source: 'userbot',
+                source: draft.sourceType,
                 sourceChatId: draft.sourceChatId,
                 sourceMessageId: draft.sourceMessageId,
                 rawMessage: draft.rawMessage,

@@ -42,6 +42,10 @@ export default async function UserbotPage() {
       <TopNav />
       <div className="container">
         <h1>Telegram userbot</h1>
+        <p style={{ color: 'var(--fg-dim)' }}>
+          Этот userbot общий для аккаунта: читает подключённые источники и передаёт сигналы в pipeline.
+          Отдельный cabinet bot настраивается внутри каждого кабинета.
+        </p>
         <UserbotPanel initialSession={session} initialChannels={channels} />
       </div>
     </>

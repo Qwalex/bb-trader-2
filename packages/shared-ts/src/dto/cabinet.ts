@@ -10,6 +10,9 @@ export const CabinetDto = z.object({
   hasBybitKey: z.boolean(),
   bybitKeyVerifiedAt: z.string().nullable(),
   bybitKeyLastError: z.string().nullable(),
+  hasCabinetBot: z.boolean(),
+  cabinetBotVerifiedAt: z.string().nullable(),
+  cabinetBotLastError: z.string().nullable(),
   createdAt: z.string(),
 });
 export type CabinetDto = z.infer<typeof CabinetDto>;

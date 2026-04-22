@@ -21,6 +21,12 @@ interface PipelineSummary {
     userbotCommands: number;
     recalcJobs: number;
   };
+  cabinetBot: {
+    configuredBots: number;
+    enabledBots: number;
+    verifiedBots: number;
+    failedDeliveries: number;
+  };
   checkedAt: string;
 }
 
@@ -132,6 +138,9 @@ export function AdminPanel({
           <span>Stuck classifying: {pipeline.stuck.ingestClassifying}</span>
           <span>Stuck userbot commands: {pipeline.stuck.userbotCommands}</span>
           <span>Stuck recalc jobs: {pipeline.stuck.recalcJobs}</span>
+          <span>Cabinet bots configured: {pipeline.cabinetBot.configuredBots}</span>
+          <span>Cabinet bots verified: {pipeline.cabinetBot.verifiedBots}</span>
+          <span>Cabinet bot failed deliveries: {pipeline.cabinetBot.failedDeliveries}</span>
           <button className="ghost" onClick={() => void refreshPipeline()}>
             Refresh
           </button>

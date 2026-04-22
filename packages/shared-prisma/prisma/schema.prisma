@@ -148,10 +148,14 @@ model Cabinet {
   settings        CabinetSetting[]
   channelFilters  CabinetChannelFilter[]
   publishGroups   CabinetPublishGroup[]
+  telegramBot     CabinetTelegramBot?
   cabinetSignals  CabinetSignal[]
   signals         Signal[]
+  signalDraftTargets SignalDraft[] @relation("SignalDraftTargetCabinet")
+  botIngestEvents IngestEvent[]
   balanceSnapshots BalanceSnapshot[]
   appLogs         AppLog[]
+  botLogDeliveries CabinetBotLogDelivery[]
   activeSessions  Session[] @relation("SessionActiveCabinet")
   orders          Order[]
   signalEvents    SignalEvent[]
@@ -230,6 +234,30 @@ model CabinetPublishGroup {
   @@index([cabinetId, enabled])
 }
 
+/// Единый Bot API бот кабинета: принимает сигналы и отправляет cabinet-scoped логи.
+model CabinetTelegramBot {
+  cabinetId         String   @id
+  cabinet           Cabinet  @relation(fields: [cabinetId], references: [id], onDelete: Cascade)
+  /// encrypted (AES-GCM)
+  botTokenEncrypted String
+  botUsername       String?
+  /// chat, из которого принимаются сигналы ботом (если null — принимать из любых диалогов)
+  signalChatId      String?
+  /// chat, куда отправляются cabinet-scoped логи
+  logChatId         String?
+  enabled           Boolean  @default(true)
+  /// секрет в webhook path, чтобы сопоставить update с кабинетом без раскрытия токена
+  webhookSecret     String   @unique
+  lastVerifiedAt    DateTime?
+  lastVerifyError   String?
+  lastInboundAt     DateTime?
+  lastOutboundAt    DateTime?
+  lastLogSentAt     DateTime?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+}
+
 // =====================================================================
 // Pipeline stage 1: ingest (userbot) -> signal draft (classifier).
 // =====================================================================
@@ -239,6 +267,10 @@ model IngestEvent {
   id              String   @id @default(cuid())
   userId          String
   user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  cabinetId       String?
+  cabinet         Cabinet? @relation(fields: [cabinetId], references: [id], onDelete: SetNull)
+  /// userbot | cabinet_bot
+  sourceType      String   @default("userbot")
   chatId          String
   messageId       String
   /// уникальный ключ для идемпотентности входа (userId-chatId-messageId)
@@ -261,6 +293,7 @@ model IngestEvent {
   mirrorMessages  TgUserbotMirrorMessage[]
 
   @@index([userId, status, createdAt])
+  @@index([cabinetId, status, createdAt])
   @@index([chatId, messageId])
   @@index([createdAt])
 }
@@ -272,6 +305,11 @@ model SignalDraft {
   user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   ingestEventId    String
   ingestEvent      IngestEvent @relation(fields: [ingestEventId], references: [id], onDelete: Cascade)
+  /// userbot | cabinet_bot
+  sourceType       String   @default("userbot")
+  /// Для cabinet_bot source — ограничивает исполнение ровно этим кабинетом.
+  targetCabinetId  String?
+  targetCabinet    Cabinet? @relation("SignalDraftTargetCabinet", fields: [targetCabinetId], references: [id], onDelete: SetNull)
   sourceChatId     String
   sourceMessageId  String
   /// BUY | SELL
@@ -299,6 +337,7 @@ model SignalDraft {
   cabinetSignals   CabinetSignal[]
 
   @@unique([userId, signalHash])
+  @@index([targetCabinetId, status, createdAt])
   @@index([userId, status, createdAt])
   @@index([sourceChatId, sourceMessageId])
 }
@@ -451,11 +490,31 @@ model AppLog {
   payload   String?
   createdAt DateTime @default(now())
 
+  cabinetBotDeliveries CabinetBotLogDelivery[]
+
   @@index([createdAt])
   @@index([cabinetId, createdAt])
   @@index([userId, createdAt])
   @@index([category, createdAt])
   @@index([level, createdAt])
+}
+
+/// Статус доставки конкретного AppLog через кабинетного Telegram-бота.
+model CabinetBotLogDelivery {
+  id        String   @id @default(cuid())
+  cabinetId String
+  cabinet   Cabinet  @relation(fields: [cabinetId], references: [id], onDelete: Cascade)
+  appLogId  String
+  appLog    AppLog   @relation(fields: [appLogId], references: [id], onDelete: Cascade)
+  /// sent | failed
+  status    String
+  error     String?
+  sentAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@unique([cabinetId, appLogId])
+  @@index([cabinetId, createdAt])
+  @@index([status, createdAt])
 }
 
 /// Mirror-сообщения: публикация входящего ингест-сообщения в бот-чат кабинета.

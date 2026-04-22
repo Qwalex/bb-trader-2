@@ -11,6 +11,9 @@ interface Cabinet {
   hasBybitKey: boolean;
   bybitKeyVerifiedAt: string | null;
   bybitKeyLastError: string | null;
+  hasCabinetBot: boolean;
+  cabinetBotVerifiedAt: string | null;
+  cabinetBotLastError: string | null;
   createdAt: string;
 }
 
@@ -114,6 +117,7 @@ export function CabinetsManager({ initial }: { initial: Cabinet[] }) {
                 <th>Сеть</th>
                 <th>Включён</th>
                 <th>Bybit ключ</th>
+                <th>Cabinet bot</th>
                 <th />
               </tr>
             </thead>
@@ -141,6 +145,18 @@ export function CabinetsManager({ initial }: { initial: Cabinet[] }) {
                       </span>
                     )}
                     {c.hasBybitKey && !c.bybitKeyVerifiedAt && !c.bybitKeyLastError && (
+                      <span className="badge">ожидает</span>
+                    )}
+                  </td>
+                  <td>
+                    {!c.hasCabinetBot && <span className="badge">не задан</span>}
+                    {c.hasCabinetBot && c.cabinetBotVerifiedAt && <span className="badge ok">OK</span>}
+                    {c.hasCabinetBot && !c.cabinetBotVerifiedAt && c.cabinetBotLastError && (
+                      <span className="badge err" title={c.cabinetBotLastError}>
+                        ошибка
+                      </span>
+                    )}
+                    {c.hasCabinetBot && !c.cabinetBotVerifiedAt && !c.cabinetBotLastError && (
                       <span className="badge">ожидает</span>
                     )}
                   </td>

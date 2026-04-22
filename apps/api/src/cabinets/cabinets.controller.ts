@@ -15,8 +15,10 @@ import {
 import {
   CreateCabinetDto,
   UpdateCabinetChannelFilterDto,
+  UpsertCabinetTelegramBotDto,
   UpdateCabinetDto,
   UpdateSettingsDto,
+  VerifyCabinetTelegramBotDto,
   UpsertBybitKeyDto,
 } from '@repo/shared-ts';
 import { SessionGuard, type RequestWithUser } from '../auth/session.guard.js';
@@ -106,5 +108,33 @@ export class CabinetsController {
     if (!parsed.success) throw new BadRequestException(parsed.error.issues);
     await this.cabinets.updateChannelFilter(req.authUserId!, id, filterId, parsed.data);
     return { ok: true };
+  }
+
+  @Get(':id/cabinet-bot')
+  getCabinetBot(@Req() req: RequestWithUser, @Param('id') id: string) {
+    return this.cabinets.getCabinetTelegramBot(req.authUserId!, id);
+  }
+
+  @Put(':id/cabinet-bot')
+  async upsertCabinetBot(
+    @Req() req: RequestWithUser,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ) {
+    const parsed = UpsertCabinetTelegramBotDto.safeParse(body);
+    if (!parsed.success) throw new BadRequestException(parsed.error.issues);
+    await this.cabinets.upsertCabinetTelegramBot(req.authUserId!, id, parsed.data);
+    return { ok: true };
+  }
+
+  @Post(':id/cabinet-bot/verify')
+  async verifyCabinetBot(
+    @Req() req: RequestWithUser,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ) {
+    const parsed = VerifyCabinetTelegramBotDto.safeParse(body);
+    if (!parsed.success) throw new BadRequestException(parsed.error.issues);
+    return this.cabinets.verifyCabinetTelegramBot(req.authUserId!, id, parsed.data);
   }
 }

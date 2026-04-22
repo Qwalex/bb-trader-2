@@ -9,6 +9,9 @@ interface Cabinet {
   hasBybitKey: boolean;
   bybitKeyVerifiedAt: string | null;
   bybitKeyLastError: string | null;
+  hasCabinetBot: boolean;
+  cabinetBotVerifiedAt: string | null;
+  cabinetBotLastError: string | null;
 }
 
 interface Setting {
@@ -30,6 +33,18 @@ interface ChannelFilter {
   minLotBump: boolean | null;
 }
 
+interface CabinetBot {
+  cabinetId: string;
+  botUsername: string | null;
+  signalChatId: string | null;
+  logChatId: string | null;
+  enabled: boolean;
+  lastVerifiedAt: string | null;
+  lastVerifyError: string | null;
+  lastInboundAt: string | null;
+  lastOutboundAt: string | null;
+}
+
 const KNOWN_SETTINGS: Array<{ key: string; description: string; placeholder?: string }> = [
   { key: 'ENTRY_USD', description: 'Размер входа по умолчанию, USD', placeholder: '10' },
   { key: 'DEFAULT_LEVERAGE', description: 'Плечо по умолчанию', placeholder: '10' },
@@ -42,16 +57,23 @@ export function CabinetDetail({
   cabinet,
   initialSettings,
   initialChannelFilters,
+  initialCabinetBot,
 }: {
   cabinet: Cabinet;
   initialSettings: Setting[];
   initialChannelFilters: ChannelFilter[];
+  initialCabinetBot: CabinetBot | null;
 }) {
   const [apiKey, setApiKey] = useState('');
   const [apiSecret, setApiSecret] = useState('');
   const [target, setTarget] = useState<'mainnet' | 'testnet'>(cabinet.network);
   const [settings, setSettings] = useState<Setting[]>(initialSettings);
   const [channelFilters, setChannelFilters] = useState<ChannelFilter[]>(initialChannelFilters);
+  const [cabinetBot, setCabinetBot] = useState<CabinetBot | null>(initialCabinetBot);
+  const [botToken, setBotToken] = useState('');
+  const [botSignalChatId, setBotSignalChatId] = useState(initialCabinetBot?.signalChatId ?? '');
+  const [botLogChatId, setBotLogChatId] = useState(initialCabinetBot?.logChatId ?? '');
+  const [botEnabled, setBotEnabled] = useState(initialCabinetBot?.enabled ?? true);
   const [msg, setMsg] = useState<string | null>(null);
 
   async function onUpsertKey(e: React.FormEvent) {
@@ -112,6 +134,56 @@ export function CabinetDetail({
     setChannelFilters((prev) =>
       prev.map((f) => (f.id === filter.id ? { ...f, enabled: !f.enabled } : f)),
     );
+  }
+
+  async function refreshCabinetBot() {
+    const res = await fetch(`/api/proxy/cabinets/${cabinet.id}/cabinet-bot`, { cache: 'no-store' });
+    if (!res.ok) return;
+    const data = (await res.json()) as CabinetBot | null;
+    setCabinetBot(data);
+    if (data) {
+      setBotSignalChatId(data.signalChatId ?? '');
+      setBotLogChatId(data.logChatId ?? '');
+      setBotEnabled(data.enabled);
+    }
+  }
+
+  async function onSaveCabinetBot(e: React.FormEvent) {
+    e.preventDefault();
+    setMsg(null);
+    const body: Record<string, unknown> = {
+      signalChatId: botSignalChatId.trim() || null,
+      logChatId: botLogChatId.trim() || null,
+      enabled: botEnabled,
+    };
+    if (botToken.trim()) body.botToken = botToken.trim();
+    const res = await fetch(`/api/proxy/cabinets/${cabinet.id}/cabinet-bot`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      setMsg(`Ошибка cabinet bot: ${await res.text()}`);
+      return;
+    }
+    setBotToken('');
+    await refreshCabinetBot();
+    setMsg('Cabinet bot сохранён.');
+  }
+
+  async function onVerifyCabinetBot() {
+    setMsg(null);
+    const res = await fetch(`/api/proxy/cabinets/${cabinet.id}/cabinet-bot/verify`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ verifySignalChatId: true, verifyLogChatId: true }),
+    });
+    if (!res.ok) {
+      setMsg(`Ошибка верификации cabinet bot: ${await res.text()}`);
+      return;
+    }
+    await refreshCabinetBot();
+    setMsg('Cabinet bot успешно верифицирован.');
   }
 
   const getValue = (key: string) => settings.find((s) => s.key === key)?.value ?? '';
@@ -191,6 +263,79 @@ export function CabinetDetail({
             <button type="submit">Сохранить настройки</button>
           </div>
         </form>
+      </div>
+
+      <div className="card">
+        <h2>Cabinet bot assistant</h2>
+        <p style={{ color: 'var(--fg-dim)' }}>
+          Один бот кабинета для intake сигналов и отправки логов/уведомлений.
+        </p>
+        <p>
+          Статус:{' '}
+          {!cabinetBot && <span className="badge">не настроен</span>}
+          {cabinetBot?.lastVerifiedAt && <span className="badge ok">verified</span>}
+          {cabinetBot && !cabinetBot.lastVerifiedAt && cabinetBot.lastVerifyError && (
+            <span className="badge err">ошибка</span>
+          )}
+          {cabinetBot && !cabinetBot.lastVerifiedAt && !cabinetBot.lastVerifyError && (
+            <span className="badge">ожидает верификации</span>
+          )}
+          {cabinetBot?.botUsername && <> · @{cabinetBot.botUsername}</>}
+        </p>
+        {cabinetBot?.lastVerifyError && (
+          <p style={{ color: 'var(--danger)' }}>{cabinetBot.lastVerifyError}</p>
+        )}
+        <form onSubmit={onSaveCabinetBot} className="col">
+          <label>
+            Bot token {cabinetBot ? '(оставьте пустым, чтобы не менять)' : ''}
+            <input
+              type="password"
+              value={botToken}
+              onChange={(e) => setBotToken(e.target.value)}
+              required={!cabinetBot}
+            />
+          </label>
+          <label>
+            Signal source chat ID
+            <input
+              placeholder="например -1001234567890"
+              value={botSignalChatId}
+              onChange={(e) => setBotSignalChatId(e.target.value)}
+            />
+          </label>
+          <label>
+            Logs destination chat ID
+            <input
+              placeholder="например -1001234567890"
+              value={botLogChatId}
+              onChange={(e) => setBotLogChatId(e.target.value)}
+            />
+          </label>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input
+              type="checkbox"
+              checked={botEnabled}
+              onChange={(e) => setBotEnabled(e.target.checked)}
+            />
+            Бот включён
+          </label>
+          <div className="row">
+            <button type="submit">Сохранить bot config</button>
+            <button type="button" className="ghost" onClick={() => void onVerifyCabinetBot()}>
+              Verify bot
+            </button>
+          </div>
+        </form>
+        {cabinetBot?.lastInboundAt && (
+          <p style={{ color: 'var(--fg-dim)' }}>
+            Last inbound: {new Date(cabinetBot.lastInboundAt).toLocaleString()}
+          </p>
+        )}
+        {cabinetBot?.lastOutboundAt && (
+          <p style={{ color: 'var(--fg-dim)' }}>
+            Last outbound: {new Date(cabinetBot.lastOutboundAt).toLocaleString()}
+          </p>
+        )}
       </div>
 
       <div className="card">

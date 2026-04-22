@@ -14,6 +14,9 @@ interface Cabinet {
   hasBybitKey: boolean;
   bybitKeyVerifiedAt: string | null;
   bybitKeyLastError: string | null;
+  hasCabinetBot: boolean;
+  cabinetBotVerifiedAt: string | null;
+  cabinetBotLastError: string | null;
   createdAt: string;
 }
 

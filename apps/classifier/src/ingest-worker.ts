@@ -15,6 +15,8 @@ import type { OpenRouterClient } from './openrouter.js';
 interface IngestRow {
   id: string;
   userId: string;
+  cabinetId: string | null;
+  sourceType: string;
   chatId: string;
   messageId: string;
   text: string | null;
@@ -71,7 +73,7 @@ export class IngestWorker {
         LIMIT ${batchSize}
       )
       RETURNING id, "userId", "chatId", "messageId", "text", "replyToText"
-               , "replyToMessageId", "rawJson"
+               , "replyToMessageId", "rawJson", "cabinetId", "sourceType"
     `;
 
     for (const row of claimed) {
@@ -100,6 +102,7 @@ export class IngestWorker {
       await prisma.appLog.create({
         data: {
           userId: row.userId,
+          cabinetId: row.cabinetId,
           level: 'warn',
           category: 'classifier',
           service: 'classifier',
@@ -138,7 +141,11 @@ export class IngestWorker {
         return;
       }
 
-      const { signal, signalHash, aiRequest, aiResponse } = extracted.data;
+      const { signal, signalHash: rawSignalHash, aiRequest, aiResponse } = extracted.data;
+      const signalHash =
+        row.sourceType === 'cabinet_bot' && row.cabinetId
+          ? `cabinet:${row.cabinetId}:${rawSignalHash}`
+          : rawSignalHash;
 
       const draft = await prisma.signalDraft.upsert({
         where: {
@@ -147,6 +154,8 @@ export class IngestWorker {
         create: {
           userId: row.userId,
           ingestEventId: row.id,
+          sourceType: row.sourceType,
+          targetCabinetId: row.cabinetId,
           sourceChatId: row.chatId,
           sourceMessageId: row.messageId,
           direction: signal.direction,
@@ -181,6 +190,7 @@ export class IngestWorker {
         await queue.send(QUEUE_NAMES.executeSignal, ExecuteSignalPayload, {
           signalDraftId: draft.id,
           userId: row.userId,
+          cabinetId: row.cabinetId ?? undefined,
         });
       }
 
@@ -227,6 +237,7 @@ export class IngestWorker {
       where: row.replyToMessageId
         ? {
             userId: row.userId,
+            ...(row.sourceType === 'cabinet_bot' && row.cabinetId ? { cabinetId: row.cabinetId } : {}),
             sourceChatId: row.chatId,
             sourceMessageId: row.replyToMessageId,
             deletedAt: null,
@@ -234,6 +245,7 @@ export class IngestWorker {
           }
         : {
             userId: row.userId,
+            ...(row.sourceType === 'cabinet_bot' && row.cabinetId ? { cabinetId: row.cabinetId } : {}),
             sourceChatId: row.chatId,
             deletedAt: null,
             status: { in: ['OPEN', 'ORDERS_PLACED'] },

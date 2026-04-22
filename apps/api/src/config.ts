@@ -22,6 +22,7 @@ const Env = z.object({
     .default('true')
     .transform((v) => v === 'true'),
   WATCHDOG_INTERVAL_MS: z.coerce.number().int().positive().default(60000),
+  CABINET_BOT_WEBHOOK_BASE_URL: z.string().url().optional(),
   WATCHDOG_INGEST_STUCK_MS: z.coerce.number().int().positive().default(10 * 60 * 1000),
   WATCHDOG_USERBOT_COMMAND_STUCK_MS: z.coerce.number().int().positive().default(10 * 60 * 1000),
   WATCHDOG_RECALC_STUCK_MS: z.coerce.number().int().positive().default(30 * 60 * 1000),
