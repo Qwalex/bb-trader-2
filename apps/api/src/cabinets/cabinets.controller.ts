@@ -1,6 +1,7 @@
 import {
   BadRequestException,
   Body,
+  ConflictException,
   Controller,
   Delete,
   Get,
@@ -35,7 +36,15 @@ export class CabinetsController {
   async create(@Req() req: RequestWithUser, @Body() body: unknown) {
     const parsed = CreateCabinetDto.safeParse(body);
     if (!parsed.success) throw new BadRequestException(parsed.error.issues);
-    return this.cabinets.create(req.authUserId!, parsed.data);
+    try {
+      return await this.cabinets.create(req.authUserId!, parsed.data);
+    } catch (error) {
+      const maybePrismaError = error as { code?: string } | null;
+      if (maybePrismaError?.code === 'P2002') {
+        throw new ConflictException('Cabinet slug already exists');
+      }
+      throw error;
+    }
   }
 
   @Patch(':id')
