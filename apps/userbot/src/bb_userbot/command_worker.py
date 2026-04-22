@@ -98,10 +98,12 @@ class CommandWorker:
             elif cmd_type == "reconnect":
                 await self._sessions.reconnect(user_id)
                 await db.finish_command(self._pool, command_id, ok=True, result={})
-            elif cmd_type in ("add_channel", "remove_channel", "sync_dialogs"):
+            elif cmd_type == "sync_dialogs":
+                result = await self._sessions.sync_dialogs(user_id)
+                await db.finish_command(self._pool, command_id, ok=True, result=result)
+            elif cmd_type in ("add_channel", "remove_channel"):
                 # Эти команды не требуют действий с Telegram клиентом:
                 # UserbotChannel управляется api, userbot читает его при каждом входящем.
-                # `sync_dialogs` в будущем может вернуть список диалогов.
                 await db.finish_command(self._pool, command_id, ok=True, result={"noop": True})
             else:
                 await db.finish_command(

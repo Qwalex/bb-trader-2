@@ -308,3 +308,29 @@ class SessionManager:
         if not rows or not rows[0]["sessionString"]:
             raise RuntimeError("no session string to reconnect")
         await self._start_client(user_id, rows[0]["sessionString"], persist=False)
+
+    async def sync_dialogs(self, user_id: str) -> dict[str, Any]:
+        async with self._lock:
+            wrapper = self._clients.get(user_id)
+        if wrapper is None:
+            raise RuntimeError("userbot session is not connected")
+
+        imported = 0
+        async for dialog in wrapper.client.iter_dialogs():
+            if not dialog.is_channel:
+                continue
+            chat_id = str(dialog.id)
+            title = (dialog.name or "").strip() or f"chat-{chat_id}"
+            entity = getattr(dialog, "entity", None)
+            username_raw = getattr(entity, "username", None)
+            username = str(username_raw).strip() if username_raw else None
+            await db.upsert_userbot_channel(
+                self._pool,
+                user_id=user_id,
+                chat_id=chat_id,
+                title=title,
+                username=username,
+            )
+            imported += 1
+
+        return {"imported": imported}

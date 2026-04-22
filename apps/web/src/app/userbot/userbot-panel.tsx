@@ -38,6 +38,10 @@ interface QrResultPayload {
   expires_in?: number;
 }
 
+interface SyncDialogsResultPayload {
+  imported?: number;
+}
+
 export function UserbotPanel({
   initialSession,
   initialChannels,
@@ -199,6 +203,27 @@ export function UserbotPanel({
     setTimeout(refetch, 1500);
   }
 
+  async function onSyncDialogs() {
+    setMsg(null);
+    const cmd = await enqueue('sync_dialogs');
+    if (!cmd) return;
+    setMsg('Синхронизируем список каналов из Telegram...');
+    const result = await pollCommand(cmd.commandId);
+    if (result?.status === 'failed') {
+      setMsg(`Ошибка синхронизации: ${result.error || 'команда завершилась с ошибкой'}`);
+      return;
+    }
+    let importedText = '';
+    try {
+      const data = (result?.resultJson ? JSON.parse(result.resultJson) : {}) as SyncDialogsResultPayload;
+      if (typeof data.imported === 'number') importedText = ` Импортировано: ${data.imported}.`;
+    } catch {
+      /* ignore malformed result payload */
+    }
+    await refetch();
+    setMsg(`Синхронизация завершена.${importedText}`);
+  }
+
   async function onAddChannel(e: React.FormEvent) {
     e.preventDefault();
     setMsg(null);
@@ -270,6 +295,11 @@ export function UserbotPanel({
         <div className="row">
           {!session.hasSession && <button onClick={onStartQrLogin}>Залогиниться (QR)</button>}
           {session.hasSession && <button onClick={onStartQrLogin}>Переподключиться</button>}
+          {session.hasSession && (
+            <button className="ghost" onClick={onSyncDialogs}>
+              Синхронизировать каналы
+            </button>
+          )}
           {session.hasSession && (
             <button className="danger" onClick={onLogout}>
               Разлогинить

@@ -83,6 +83,30 @@ async def list_enabled_channels(pool: asyncpg.Pool, user_id: str) -> list[Userbo
     ]
 
 
+async def upsert_userbot_channel(
+    pool: asyncpg.Pool,
+    *,
+    user_id: str,
+    chat_id: str,
+    title: str,
+    username: str | None,
+) -> None:
+    await pool.execute(
+        """
+        INSERT INTO "UserbotChannel" ("userId", "chatId", title, username, enabled, "updatedAt")
+        VALUES ($1, $2, $3, $4, false, now())
+        ON CONFLICT ("userId", "chatId") DO UPDATE SET
+            title = EXCLUDED.title,
+            username = EXCLUDED.username,
+            "updatedAt" = now()
+        """,
+        user_id,
+        chat_id,
+        title,
+        username,
+    )
+
+
 async def update_session_status(
     pool: asyncpg.Pool,
     user_id: str,
