@@ -35,6 +35,7 @@ interface QrResultPayload {
   qr_url?: string;
   expiresAt?: string;
   expires_at?: string;
+  expires_in?: number;
 }
 
 export function UserbotPanel({
@@ -48,13 +49,19 @@ export function UserbotPanel({
   const [channels, setChannels] = useState(initialChannels);
   const [qr, setQr] = useState<{ commandId: string; url: string | null; expiresAt: string | null } | null>(null);
   const [newChannel, setNewChannel] = useState({ chatId: '', title: '', username: '' });
+  const [twoFaPassword, setTwoFaPassword] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
   function extractQr(resultJson: string | null): { url: string | null; expiresAt: string | null } | null {
     if (!resultJson) return null;
     try {
       const data = JSON.parse(resultJson) as QrResultPayload;
       const url = data.qrUrl ?? data.qr_url ?? null;
-      const expiresAt = data.expiresAt ?? data.expires_at ?? null;
+      const expiresAt =
+        data.expiresAt ??
+        data.expires_at ??
+        (typeof data.expires_in === 'number'
+          ? new Date(Date.now() + data.expires_in * 1000).toISOString()
+          : null);
       if (!url) return null;
       return { url, expiresAt };
     } catch {
@@ -96,7 +103,7 @@ export function UserbotPanel({
         setQr({ commandId, url: qrData.url, expiresAt: qrData.expiresAt });
         return cmd;
       }
-      if (cmd.status === 'done' || cmd.status === 'error') return cmd;
+      if (cmd.status === 'done' || cmd.status === 'failed') return cmd;
     }
     return null;
   }
@@ -112,7 +119,11 @@ export function UserbotPanel({
       if (!res.ok) continue;
       const next = (await res.json()) as Session;
       setSession(next);
-      if (next.status === 'connected' || next.status === 'failed' || next.status === 'error') {
+      if (
+        next.status === 'connected' ||
+        next.status === 'failed' ||
+        next.status === 'awaiting_2fa'
+      ) {
         return next;
       }
     }
@@ -126,7 +137,7 @@ export function UserbotPanel({
     setQr({ commandId: cmd.commandId, url: null, expiresAt: null });
     const result = await pollCommand(cmd.commandId);
     const qrFromResult = extractQr(result?.resultJson ?? null);
-    if (result?.status === 'error') {
+    if (result?.status === 'failed') {
       setMsg(`Ошибка: ${result.error}`);
     } else if (qrFromResult?.url) {
       setMsg('QR получен. Отсканируйте его в Telegram и дождитесь статуса connected.');
@@ -134,9 +145,11 @@ export function UserbotPanel({
       if (finalSession?.status === 'connected') {
         setMsg('Сессия успешно подключена.');
         setQr(null);
+      } else if (finalSession?.status === 'awaiting_2fa') {
+        setMsg('Нужен пароль 2FA. Введите его ниже, чтобы завершить вход.');
       } else if (finalSession?.lastError) {
         setMsg(`Ошибка входа: ${finalSession.lastError}`);
-      } else if (finalSession?.status === 'failed' || finalSession?.status === 'error') {
+      } else if (finalSession?.status === 'failed') {
         setMsg(`Ошибка входа: статус ${finalSession.status}`);
       } else {
         setMsg(
@@ -145,6 +158,36 @@ export function UserbotPanel({
       }
     } else if (result?.status === 'done') {
       setMsg('Команда login_qr выполнена, ожидаем подтверждение входа в Telegram.');
+    }
+    await refetch();
+  }
+
+  async function onSubmitTwoFa(e: React.FormEvent) {
+    e.preventDefault();
+    setMsg(null);
+    const password = twoFaPassword.trim();
+    if (!password) {
+      setMsg('Введите пароль 2FA.');
+      return;
+    }
+    const cmd = await enqueue('submit_2fa_password', { password });
+    if (!cmd) return;
+    setTwoFaPassword('');
+    setMsg('Проверяем 2FA-пароль...');
+    const result = await pollCommand(cmd.commandId);
+    if (result?.status === 'failed') {
+      setMsg(`Ошибка 2FA: ${result.error || 'не удалось подтвердить пароль'}`);
+      await refetch();
+      return;
+    }
+    const finalSession = await waitForSessionTransition(60_000, 1_500);
+    if (finalSession?.status === 'connected') {
+      setMsg('Сессия успешно подключена.');
+      setQr(null);
+    } else if (finalSession?.status === 'awaiting_2fa') {
+      setMsg(finalSession.lastError || 'Пароль 2FA неверный, попробуйте снова.');
+    } else if (finalSession?.status === 'failed') {
+      setMsg(finalSession.lastError || 'Не удалось завершить вход по 2FA.');
     }
     await refetch();
   }
@@ -214,7 +257,7 @@ export function UserbotPanel({
         <h2>Сессия</h2>
         <p>
           Статус:{' '}
-          <span className={`badge ${session.status === 'connected' ? 'ok' : session.status === 'error' ? 'err' : ''}`}>
+          <span className={`badge ${session.status === 'connected' ? 'ok' : session.status === 'failed' ? 'err' : ''}`}>
             {session.status}
           </span>
           {session.phone && <> · телефон: {session.phone}</>}
@@ -233,6 +276,19 @@ export function UserbotPanel({
             </button>
           )}
         </div>
+
+        {session.status === 'awaiting_2fa' && (
+          <form onSubmit={onSubmitTwoFa} className="row" style={{ marginTop: 12 }}>
+            <input
+              type="password"
+              placeholder="Введите пароль 2FA"
+              value={twoFaPassword}
+              onChange={(e) => setTwoFaPassword(e.target.value)}
+              required
+            />
+            <button type="submit">Подтвердить 2FA</button>
+          </form>
+        )}
 
         {qr && (
           <div className="card" style={{ marginTop: 16 }}>

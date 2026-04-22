@@ -74,7 +74,12 @@ async def amain() -> None:
     )
     await _start_sessions_when_schema_ready(sessions, log)
 
-    worker = CommandWorker(pool, sessions, poll_interval_sec=cfg.command_poll_interval_sec)
+    worker = CommandWorker(
+        pool,
+        sessions,
+        poll_interval_sec=cfg.command_poll_interval_sec,
+        encryption_key=cfg.encryption_key,
+    )
 
     stop_event = asyncio.Event()
 

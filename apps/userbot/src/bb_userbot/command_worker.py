@@ -10,6 +10,7 @@ import asyncpg
 import structlog
 
 from . import db
+from .crypto import decrypt_secret, is_encrypted_payload
 from .session_manager import SessionManager
 
 log = structlog.get_logger(__name__)
@@ -22,10 +23,12 @@ class CommandWorker:
         sessions: SessionManager,
         *,
         poll_interval_sec: int = 2,
+        encryption_key: str,
     ) -> None:
         self._pool = pool
         self._sessions = sessions
         self._poll_interval_sec = poll_interval_sec
+        self._encryption_key = encryption_key
         self._stopped = asyncio.Event()
 
     async def run(self) -> None:
@@ -78,6 +81,17 @@ class CommandWorker:
             if cmd_type == "login_qr":
                 result = await self._sessions.start_qr_login(user_id)
                 await db.finish_command(self._pool, command_id, ok=True, result=result)
+            elif cmd_type == "submit_2fa_password":
+                raw_password = payload.get("passwordEncrypted")
+                if not isinstance(raw_password, str):
+                    raise RuntimeError("passwordEncrypted is required")
+                password = (
+                    decrypt_secret(self._encryption_key, raw_password)
+                    if is_encrypted_payload(raw_password)
+                    else raw_password
+                )
+                await self._sessions.submit_2fa_password(user_id, password)
+                await db.finish_command(self._pool, command_id, ok=True, result={})
             elif cmd_type == "logout":
                 await self._sessions.logout(user_id)
                 await db.finish_command(self._pool, command_id, ok=True, result={})
@@ -111,5 +125,5 @@ class CommandWorker:
                 category="userbot",
                 message=f"command {cmd_type} failed: {exc}",
                 user_id=user_id,
-                payload={"command_id": command_id, "payload": payload},
+                payload={"command_id": command_id, "payload_keys": sorted(payload.keys())},
             )

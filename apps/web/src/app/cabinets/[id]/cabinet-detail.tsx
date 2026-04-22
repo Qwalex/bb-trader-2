@@ -97,18 +97,19 @@ export function CabinetDetail({
         <h2>Bybit API-ключи</h2>
         <p style={{ color: 'var(--fg-dim)' }}>
           Секрет шифруется (AES-256-GCM) в API. Текущий статус:{' '}
-          {cabinet.hasBybitKey ? (
-            cabinet.bybitKeyVerifiedAt ? (
-              <span className="badge ok">
-                OK, проверено {new Date(cabinet.bybitKeyVerifiedAt).toLocaleString()}
-              </span>
-            ) : (
-              <span className="badge err">
-                ошибка: {cabinet.bybitKeyLastError || 'не указана'}
-              </span>
-            )
-          ) : (
-            <span className="badge">не задан</span>
+          {!cabinet.hasBybitKey && <span className="badge">не задан</span>}
+          {cabinet.hasBybitKey && cabinet.bybitKeyVerifiedAt && (
+            <span className="badge ok">
+              OK, проверено {new Date(cabinet.bybitKeyVerifiedAt).toLocaleString()}
+            </span>
+          )}
+          {cabinet.hasBybitKey && !cabinet.bybitKeyVerifiedAt && cabinet.bybitKeyLastError && (
+            <span className="badge err">
+              ошибка: {cabinet.bybitKeyLastError || 'не указана'}
+            </span>
+          )}
+          {cabinet.hasBybitKey && !cabinet.bybitKeyVerifiedAt && !cabinet.bybitKeyLastError && (
+            <span className="badge">ожидает проверки trader-сервисом</span>
           )}
         </p>
         <form onSubmit={onUpsertKey} className="col">

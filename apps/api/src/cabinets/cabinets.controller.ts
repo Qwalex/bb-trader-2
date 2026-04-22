@@ -5,7 +5,6 @@ import {
   Controller,
   Delete,
   Get,
-  NotFoundException,
   Param,
   Patch,
   Post,
@@ -51,21 +50,13 @@ export class CabinetsController {
   async update(@Req() req: RequestWithUser, @Param('id') id: string, @Body() body: unknown) {
     const parsed = UpdateCabinetDto.safeParse(body);
     if (!parsed.success) throw new BadRequestException(parsed.error.issues);
-    try {
-      await this.cabinets.update(req.authUserId!, id, parsed.data);
-    } catch {
-      throw new NotFoundException('Cabinet not found');
-    }
+    await this.cabinets.update(req.authUserId!, id, parsed.data);
     return { ok: true };
   }
 
   @Delete(':id')
   async remove(@Req() req: RequestWithUser, @Param('id') id: string) {
-    try {
-      await this.cabinets.remove(req.authUserId!, id);
-    } catch {
-      throw new NotFoundException('Cabinet not found');
-    }
+    await this.cabinets.remove(req.authUserId!, id);
     return { ok: true };
   }
 

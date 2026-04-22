@@ -22,6 +22,8 @@ interface CachedClient {
   cabinetId: string;
   client: RestClientV5;
   testnet: boolean;
+  sourceUpdatedAt: number;
+  sourceApiKey: string;
   addedAt: number;
 }
 
@@ -34,9 +36,6 @@ export class BybitClientRegistry {
   }
 
   async getClient(cabinetId: string): Promise<RestClientV5> {
-    const hit = this.cache.get(cabinetId);
-    if (hit) return hit.client;
-
     const cabinet = await this.opts.prisma.cabinet.findUnique({
       where: { id: cabinetId },
       include: { bybitKey: true },
@@ -48,7 +47,7 @@ export class BybitClientRegistry {
       throw new Error(`Cabinet ${cabinetId} is disabled`);
     }
 
-    const useTestnet = cabinet.bybitKey.testnet || cabinet.network === 'testnet';
+    const useTestnet = cabinet.bybitKey.testnet;
     const apiKey = useTestnet
       ? cabinet.bybitKey.apiKeyTestnet
       : cabinet.bybitKey.apiKeyMainnet;
@@ -59,6 +58,16 @@ export class BybitClientRegistry {
       throw new Error(
         `Cabinet ${cabinetId} is missing ${useTestnet ? 'testnet' : 'mainnet'} API credentials`,
       );
+    }
+    const sourceUpdatedAt = cabinet.bybitKey.updatedAt.getTime();
+    const hit = this.cache.get(cabinetId);
+    if (
+      hit &&
+      hit.testnet === useTestnet &&
+      hit.sourceUpdatedAt === sourceUpdatedAt &&
+      hit.sourceApiKey === apiKey
+    ) {
+      return hit.client;
     }
 
     const apiSecret = isEncryptedPayload(rawSecret)
@@ -76,6 +85,8 @@ export class BybitClientRegistry {
       cabinetId,
       client,
       testnet: useTestnet,
+      sourceUpdatedAt,
+      sourceApiKey: apiKey,
       addedAt: Date.now(),
     });
     this.evictIfNeeded();

@@ -15,8 +15,8 @@ export class BybitPositionService {
   ) {}
 
   async pollCabinet(cabinetId: string): Promise<void> {
-    const client = await this.registry.getClient(cabinetId);
     try {
+      const client = await this.registry.getClient(cabinetId);
       const balance = await client.getWalletBalance({ accountType: 'UNIFIED' });
       const totalEquity = Number(balance.result?.list?.[0]?.totalEquity ?? 0);
       if (Number.isFinite(totalEquity) && totalEquity > 0) {
@@ -27,12 +27,35 @@ export class BybitPositionService {
 
       // MVP: не ходим за позициями, не применяем TP/SL-шаги.
       // TODO(port): портировать apply-tp-sl-step и reconcile из bb-trader.
+      await this.markBybitVerified(cabinetId, null);
     } catch (error) {
+      const message = errorMessage(error);
+      await this.markBybitVerified(cabinetId, message);
       this.logger.error(
-        { cabinetId, error: errorMessage(error) },
+        { cabinetId, error: message },
         'trader.position.poll_failed',
       );
     }
+  }
+
+  private async markBybitVerified(cabinetId: string, error: string | null): Promise<void> {
+    if (error) {
+      await this.prisma.cabinetBybitKey.updateMany({
+        where: { cabinetId },
+        data: {
+          lastVerifiedAt: null,
+          lastVerifyError: error.slice(0, 500),
+        },
+      });
+      return;
+    }
+    await this.prisma.cabinetBybitKey.updateMany({
+      where: { cabinetId },
+      data: {
+        lastVerifiedAt: new Date(),
+        lastVerifyError: null,
+      },
+    });
   }
 }
 

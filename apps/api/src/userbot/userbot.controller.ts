@@ -39,6 +39,12 @@ export class UserbotController {
   async enqueue(@Req() req: RequestWithUser, @Body() body: unknown) {
     const parsed = EnqueueCommandBody.safeParse(body);
     if (!parsed.success) throw new BadRequestException(parsed.error.issues);
+    if (
+      (parsed.data.type as string) === 'submit_2fa_password' &&
+      typeof parsed.data.payload?.password !== 'string'
+    ) {
+      throw new BadRequestException('payload.password is required for submit_2fa_password');
+    }
     return this.userbot.enqueueCommand(req.authUserId!, parsed.data.type, parsed.data.payload);
   }
 

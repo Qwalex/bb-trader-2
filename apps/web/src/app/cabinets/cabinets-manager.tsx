@@ -133,19 +133,15 @@ export function CabinetsManager({ initial }: { initial: Cabinet[] }) {
                     </button>
                   </td>
                   <td>
-                    {c.hasBybitKey ? (
-                      c.bybitKeyVerifiedAt ? (
-                        <span className="badge ok">OK</span>
-                      ) : (
-                        <span
-                          className="badge err"
-                          title={c.bybitKeyLastError ?? undefined}
-                        >
-                          ошибка
-                        </span>
-                      )
-                    ) : (
-                      <span className="badge">не задан</span>
+                    {!c.hasBybitKey && <span className="badge">не задан</span>}
+                    {c.hasBybitKey && c.bybitKeyVerifiedAt && <span className="badge ok">OK</span>}
+                    {c.hasBybitKey && !c.bybitKeyVerifiedAt && c.bybitKeyLastError && (
+                      <span className="badge err" title={c.bybitKeyLastError}>
+                        ошибка
+                      </span>
+                    )}
+                    {c.hasBybitKey && !c.bybitKeyVerifiedAt && !c.bybitKeyLastError && (
+                      <span className="badge">ожидает</span>
                     )}
                   </td>
                   <td>

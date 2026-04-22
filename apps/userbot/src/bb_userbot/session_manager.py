@@ -18,6 +18,7 @@ from typing import Any
 import asyncpg
 import structlog
 from telethon import TelegramClient, events
+from telethon.errors import PasswordHashInvalidError, SessionPasswordNeededError
 from telethon.sessions import StringSession
 
 from . import db
@@ -47,6 +48,7 @@ class SessionManager:
         self._api_hash = api_hash
         self._encryption_key = encryption_key
         self._clients: dict[str, _ClientWrapper] = {}
+        self._pending_2fa: dict[str, TelegramClient] = {}
         self._lock = asyncio.Lock()
 
     async def start_existing_sessions(self) -> None:
@@ -67,6 +69,12 @@ class SessionManager:
             for wrapper in list(self._clients.values()):
                 await self._disconnect_client(wrapper)
             self._clients.clear()
+            for client in list(self._pending_2fa.values()):
+                try:
+                    await client.disconnect()
+                except Exception:  # noqa: BLE001
+                    pass
+            self._pending_2fa.clear()
 
     async def _start_client(
         self, user_id: str, session_value: str, *, persist: bool
@@ -186,6 +194,9 @@ class SessionManager:
         async with self._lock:
             if user_id in self._clients:
                 await self._disconnect_client(self._clients.pop(user_id))
+            pending = self._pending_2fa.pop(user_id, None)
+            if pending is not None:
+                await pending.disconnect()
 
         client = TelegramClient(
             StringSession(), self._api_id, self._api_hash,
@@ -211,34 +222,85 @@ class SessionManager:
                     self._install_handlers(wrapper)
                     self._clients[user_id] = wrapper
                 log.info("userbot.qr_login_success", user_id=user_id)
+            except SessionPasswordNeededError:
+                async with self._lock:
+                    self._pending_2fa[user_id] = client
+                await db.update_session_status(
+                    self._pool, user_id, "awaiting_2fa", last_error=None
+                )
+                log.info("userbot.qr_2fa_required", user_id=user_id)
             except Exception as exc:  # noqa: BLE001
                 log.error("userbot.qr_login_failed", user_id=user_id, error=str(exc))
                 await db.update_session_status(
                     self._pool, user_id, "failed", last_error=str(exc)
                 )
+                async with self._lock:
+                    self._pending_2fa.pop(user_id, None)
                 await client.disconnect()
 
         await db.update_session_status(self._pool, user_id, "qr_pending")
         asyncio.create_task(_wait_for_scan())
         return {"qr_url": qr.url, "expires_in": 60}
 
+    async def submit_2fa_password(self, user_id: str, password: str) -> None:
+        async with self._lock:
+            client = self._pending_2fa.get(user_id)
+        if client is None:
+            raise RuntimeError("2FA password is not requested for this user")
+        try:
+            await client.sign_in(password=password)
+            session_str = client.session.save()
+            me: Any = await client.get_me()
+            phone = getattr(me, "phone", None)
+            await db.save_session_string(
+                self._pool,
+                user_id,
+                encrypt_secret(self._encryption_key, session_str),
+                str(phone) if phone else None,
+            )
+            async with self._lock:
+                self._pending_2fa.pop(user_id, None)
+                wrapper = _ClientWrapper(user_id=user_id, client=client)
+                self._install_handlers(wrapper)
+                self._clients[user_id] = wrapper
+            log.info("userbot.2fa_login_success", user_id=user_id)
+        except PasswordHashInvalidError as exc:
+            await db.update_session_status(
+                self._pool, user_id, "awaiting_2fa", last_error="Invalid 2FA password"
+            )
+            raise RuntimeError("Invalid 2FA password") from exc
+        except Exception as exc:  # noqa: BLE001
+            await db.update_session_status(
+                self._pool, user_id, "failed", last_error=str(exc)
+            )
+            async with self._lock:
+                self._pending_2fa.pop(user_id, None)
+            await client.disconnect()
+            raise
+
     async def logout(self, user_id: str) -> None:
         async with self._lock:
             wrapper = self._clients.pop(user_id, None)
+            pending = self._pending_2fa.pop(user_id, None)
         if wrapper is not None:
             try:
                 await wrapper.client.log_out()
             except Exception as exc:  # noqa: BLE001
                 log.warning("userbot.logout_error", user_id=user_id, error=str(exc))
             await self._disconnect_client(wrapper)
+        if pending is not None:
+            await pending.disconnect()
         await db.clear_session(self._pool, user_id)
         log.info("userbot.logout", user_id=user_id)
 
     async def reconnect(self, user_id: str) -> None:
         async with self._lock:
             wrapper = self._clients.pop(user_id, None)
+            pending = self._pending_2fa.pop(user_id, None)
         if wrapper is not None:
             await self._disconnect_client(wrapper)
+        if pending is not None:
+            await pending.disconnect()
         rows = await self._pool.fetch(
             'SELECT "sessionString" FROM "UserbotSession" WHERE "userId" = $1',
             user_id,

@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import type { PrismaClient } from '@repo/shared-prisma';
 import {
   encryptSecret,
@@ -65,7 +65,7 @@ export class CabinetsService {
     const owned = await this.prisma.cabinet.findFirst({
       where: { id: cabinetId, ownerUserId: userId },
     });
-    if (!owned) throw new Error('Cabinet not found');
+    if (!owned) throw new NotFoundException('Cabinet not found');
     await this.prisma.cabinet.update({
       where: { id: cabinetId },
       data: {
@@ -80,7 +80,7 @@ export class CabinetsService {
     const owned = await this.prisma.cabinet.findFirst({
       where: { id: cabinetId, ownerUserId: userId },
     });
-    if (!owned) throw new Error('Cabinet not found');
+    if (!owned) throw new NotFoundException('Cabinet not found');
     await this.prisma.cabinet.delete({ where: { id: cabinetId } });
   }
 
@@ -92,7 +92,7 @@ export class CabinetsService {
     const owned = await this.prisma.cabinet.findFirst({
       where: { id: cabinetId, ownerUserId: userId },
     });
-    if (!owned) throw new Error('Cabinet not found');
+    if (!owned) throw new NotFoundException('Cabinet not found');
 
     const enc = (raw: string | null | undefined): string | undefined => {
       if (raw == null) return undefined;
@@ -153,6 +153,6 @@ export class CabinetsService {
       where: { id: cabinetId, ownerUserId: userId },
       select: { id: true },
     });
-    if (!owned) throw new Error('Cabinet not found');
+    if (!owned) throw new NotFoundException('Cabinet not found');
   }
 }

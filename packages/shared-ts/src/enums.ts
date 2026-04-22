@@ -42,12 +42,14 @@ export const USERBOT_SESSION_STATUSES = [
   'connecting',
   'connected',
   'qr_pending',
+  'awaiting_2fa',
   'failed',
 ] as const;
 export type UserbotSessionStatus = (typeof USERBOT_SESSION_STATUSES)[number];
 
 export const USERBOT_COMMAND_TYPES = [
   'login_qr',
+  'submit_2fa_password',
   'logout',
   'add_channel',
   'remove_channel',

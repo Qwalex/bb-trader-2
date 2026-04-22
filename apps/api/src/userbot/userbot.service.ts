@@ -5,7 +5,7 @@
  * Реальное исполнение — в apps/userbot (Python), который поллит UserbotCommand.
  */
 
-import { Inject, Injectable } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import type { PrismaClient } from '@repo/shared-prisma';
 import type {
   AddChannelDto,
@@ -13,11 +13,17 @@ import type {
   UserbotChannelDto,
   UserbotSessionDto,
 } from '@repo/shared-ts';
+import { encryptSecret } from '@repo/shared-ts';
+import { APP_CONFIG } from '../config.module.js';
+import type { AppConfig } from '../config.js';
 import { PRISMA } from '../prisma.module.js';
 
 @Injectable()
 export class UserbotService {
-  constructor(@Inject(PRISMA) private readonly prisma: PrismaClient) {}
+  constructor(
+    @Inject(PRISMA) private readonly prisma: PrismaClient,
+    @Inject(APP_CONFIG) private readonly config: AppConfig,
+  ) {}
 
   async getSession(userId: string): Promise<UserbotSessionDto> {
     const s = await this.prisma.userbotSession.findUnique({ where: { userId } });
@@ -46,11 +52,24 @@ export class UserbotService {
     type: string,
     payload?: Record<string, unknown>,
   ): Promise<{ commandId: string }> {
+    let safePayload = payload;
+    if (type === 'submit_2fa_password') {
+      const password = payload?.password;
+      if (typeof password !== 'string' || password.trim().length === 0) {
+        throw new BadRequestException('2FA password is required');
+      }
+      safePayload = {
+        passwordEncrypted: encryptSecret(
+          { encryptionKey: this.config.APP_ENCRYPTION_KEY },
+          password.trim(),
+        ),
+      };
+    }
     const command = await this.prisma.userbotCommand.create({
       data: {
         userId,
         type,
-        payloadJson: payload ? JSON.stringify(payload) : null,
+        payloadJson: safePayload ? JSON.stringify(safePayload) : null,
         status: 'queued',
       },
     });

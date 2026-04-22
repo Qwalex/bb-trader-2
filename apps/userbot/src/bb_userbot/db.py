@@ -92,13 +92,17 @@ async def update_session_status(
 ) -> None:
     await pool.execute(
         """
-        UPDATE "UserbotSession"
-        SET status = $2,
-            "lastError" = $3,
-            "lastSeenAt" = CASE WHEN $2 = 'connected' THEN now() ELSE "lastSeenAt" END,
-            phone = COALESCE($4, phone),
+        INSERT INTO "UserbotSession" ("userId", status, "lastError", phone, "updatedAt")
+        VALUES ($1, $2, $3, $4, now())
+        ON CONFLICT ("userId") DO UPDATE SET
+            status = EXCLUDED.status,
+            "lastError" = EXCLUDED."lastError",
+            "lastSeenAt" = CASE
+                WHEN EXCLUDED.status = 'connected' THEN now()
+                ELSE "UserbotSession"."lastSeenAt"
+            END,
+            phone = COALESCE(EXCLUDED.phone, "UserbotSession".phone),
             "updatedAt" = now()
-        WHERE "userId" = $1
         """,
         user_id,
         status,
@@ -131,9 +135,13 @@ async def save_session_string(
 async def clear_session(pool: asyncpg.Pool, user_id: str) -> None:
     await pool.execute(
         """
-        UPDATE "UserbotSession"
-        SET "sessionString" = NULL, status = 'disconnected', "updatedAt" = now()
-        WHERE "userId" = $1
+        INSERT INTO "UserbotSession" ("userId", "sessionString", status, "updatedAt")
+        VALUES ($1, NULL, 'disconnected', now())
+        ON CONFLICT ("userId") DO UPDATE SET
+            "sessionString" = NULL,
+            status = 'disconnected',
+            "lastError" = NULL,
+            "updatedAt" = now()
         """,
         user_id,
     )
