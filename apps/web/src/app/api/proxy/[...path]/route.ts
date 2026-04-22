@@ -23,24 +23,38 @@ async function proxy(req: NextRequest, path: string[]) {
   const target = makeTargetUrl(req, path);
   const method = req.method.toUpperCase();
   const hasBody = method !== 'GET' && method !== 'HEAD';
+  try {
+    // `req.body` is a stream; forwarding stream-to-stream can fail in Node fetch
+    // (duplex/runtime differences). Buffer explicitly for stable Railway behavior.
+    const requestBody = hasBody ? await req.arrayBuffer() : undefined;
+    const upstream = await fetch(target, {
+      method,
+      headers: copyHeaders(req),
+      body: requestBody,
+      redirect: 'manual',
+      cache: 'no-store',
+    });
 
-  const upstream = await fetch(target, {
-    method,
-    headers: copyHeaders(req),
-    body: hasBody ? req.body : undefined,
-    redirect: 'manual',
-    cache: 'no-store',
-  });
+    const responseHeaders = new Headers(upstream.headers);
+    responseHeaders.delete('content-encoding');
+    responseHeaders.delete('transfer-encoding');
 
-  const responseHeaders = new Headers(upstream.headers);
-  responseHeaders.delete('content-encoding');
-  responseHeaders.delete('transfer-encoding');
-
-  const body = await upstream.arrayBuffer();
-  return new NextResponse(body, {
-    status: upstream.status,
-    headers: responseHeaders,
-  });
+    const body = await upstream.arrayBuffer();
+    return new NextResponse(body, {
+      status: upstream.status,
+      headers: responseHeaders,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return NextResponse.json(
+      {
+        error: 'proxy_failed',
+        target,
+        message,
+      },
+      { status: 502 },
+    );
+  }
 }
 
 type Params = { params: Promise<{ path: string[] }> };
