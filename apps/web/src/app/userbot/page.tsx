@@ -55,6 +55,19 @@ interface RecentEvent {
   draftStatus: string | null;
 }
 
+interface ActiveCabinetFilter {
+  id: string;
+  cabinetId: string;
+  userbotChannelId: string;
+  chatId: string;
+  title: string;
+  enabled: boolean;
+  defaultLeverage: number | null;
+  forcedLeverage: number | null;
+  defaultEntryUsd: string | null;
+  minLotBump: boolean | null;
+}
+
 interface CurrentUser {
   id: string;
   activeCabinetId: string | null;
@@ -77,6 +90,12 @@ export default async function UserbotPage() {
     apiFetch<CabinetUsage[]>('/userbot/dashboard/cabinets'),
     apiFetch<RecentEvent[]>('/userbot/events/recent?limit=40'),
   ]);
+  const activeCabinetFilters =
+    me.activeCabinetId == null
+      ? []
+      : await apiFetch<ActiveCabinetFilter[]>(`/cabinets/${me.activeCabinetId}/channel-filters`).catch(
+          () => [],
+        );
 
   return (
     <>
@@ -94,6 +113,7 @@ export default async function UserbotPage() {
           initialCabinetUsage={cabinetUsage}
           initialRecentEvents={recentEvents}
           activeCabinetId={me.activeCabinetId}
+          initialActiveCabinetFilters={activeCabinetFilters}
         />
       </div>
     </>

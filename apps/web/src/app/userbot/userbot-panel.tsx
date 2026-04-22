@@ -53,6 +53,19 @@ interface RecentEvent {
   draftStatus: string | null;
 }
 
+interface ActiveCabinetFilter {
+  id: string;
+  cabinetId: string;
+  userbotChannelId: string;
+  chatId: string;
+  title: string;
+  enabled: boolean;
+  defaultLeverage: number | null;
+  forcedLeverage: number | null;
+  defaultEntryUsd: string | null;
+  minLotBump: boolean | null;
+}
+
 interface CommandResult {
   id: string;
   type: string;
@@ -93,6 +106,7 @@ export function UserbotPanel({
   initialCabinetUsage,
   initialRecentEvents,
   activeCabinetId,
+  initialActiveCabinetFilters,
 }: {
   initialSession: Session;
   initialChannels: Channel[];
@@ -100,30 +114,71 @@ export function UserbotPanel({
   initialCabinetUsage: CabinetUsage[];
   initialRecentEvents: RecentEvent[];
   activeCabinetId: string | null;
+  initialActiveCabinetFilters: ActiveCabinetFilter[];
 }) {
   const [session, setSession] = useState(initialSession);
   const [channels, setChannels] = useState(initialChannels);
   const [summary, setSummary] = useState(initialSummary);
   const [cabinetUsage, setCabinetUsage] = useState(initialCabinetUsage);
   const [recentEvents, setRecentEvents] = useState(initialRecentEvents);
+  const [activeCabinetFilters, setActiveCabinetFilters] = useState(initialActiveCabinetFilters);
   const [search, setSearch] = useState('');
+  const [onlySignals, setOnlySignals] = useState(true);
+  const [groupBySource, setGroupBySource] = useState(true);
   const [qr, setQr] = useState<{ commandId: string; url: string | null; expiresAt: string | null } | null>(null);
   const [newChannel, setNewChannel] = useState({ chatId: '', title: '', username: '' });
   const [twoFaPassword, setTwoFaPassword] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
 
+  const filterByChannelId = useMemo(
+    () => new Map(activeCabinetFilters.map((f) => [f.userbotChannelId, f])),
+    [activeCabinetFilters],
+  );
+
   const filteredChannels = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return channels;
     return channels.filter((row) => {
+      const sourceName = formatSourceName(row).toLowerCase();
       return (
-        row.title.toLowerCase().includes(q) ||
+        sourceName.includes(q) ||
         row.chatId.toLowerCase().includes(q) ||
         (row.username ?? '').toLowerCase().includes(q)
       );
     });
   }, [channels, search]);
+
+  const filteredRecentEvents = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const bySignal = onlySignals
+      ? recentEvents.filter((row) => row.classification === 'signal')
+      : recentEvents;
+    if (!q) return bySignal;
+    return bySignal.filter((row) => {
+      const sourceName = (row.chatTitle ?? row.chatId).toLowerCase();
+      const text = (row.text ?? '').toLowerCase();
+      return sourceName.includes(q) || row.chatId.toLowerCase().includes(q) || text.includes(q);
+    });
+  }, [onlySignals, recentEvents, search]);
+
+  const recentBySource = useMemo(() => {
+    const grouped = new Map<string, RecentEvent[]>();
+    for (const row of filteredRecentEvents) {
+      const list = grouped.get(row.chatId) ?? [];
+      list.push(row);
+      grouped.set(row.chatId, list);
+    }
+    return Array.from(grouped.entries())
+      .map(([chatId, rows]) => ({
+        chatId,
+        title: rows[0]?.chatTitle ?? chatId,
+        rows: [...rows].sort(
+          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+        ),
+      }))
+      .sort((a, b) => a.title.localeCompare(b.title));
+  }, [filteredRecentEvents]);
 
   function extractQr(resultJson: string | null): { url: string | null; expiresAt: string | null } | null {
     if (!resultJson) return null;
@@ -156,6 +211,14 @@ export function UserbotPanel({
     setSummary(ds as DashboardSummary);
     setCabinetUsage(dc as CabinetUsage[]);
     setRecentEvents(re as RecentEvent[]);
+    if (activeCabinetId) {
+      const filtersRes = await fetch(`/api/proxy/cabinets/${activeCabinetId}/channel-filters`, {
+        cache: 'no-store',
+      });
+      if (filtersRes.ok) {
+        setActiveCabinetFilters((await filtersRes.json()) as ActiveCabinetFilter[]);
+      }
+    }
   }
 
   async function enqueue(type: string, payload?: Record<string, unknown>) {
@@ -312,7 +375,11 @@ export function UserbotPanel({
     setMsg(`Ошибка: ${await res.text()}`);
   }
 
-  async function updateChannel(channel: Channel, data: { enabled?: boolean; sourcePriority?: number }, busy: string) {
+  async function updateChannel(
+    channel: Channel,
+    data: { enabled?: boolean; sourcePriority?: number },
+    busy: string,
+  ) {
     setBusyKey(busy);
     setMsg(null);
     try {
@@ -323,6 +390,44 @@ export function UserbotPanel({
           enabled: data.enabled ?? channel.enabled,
           sourcePriority: data.sourcePriority ?? channel.sourcePriority,
         }),
+      });
+      if (!res.ok) {
+        setMsg(`Ошибка: ${await res.text()}`);
+        return;
+      }
+      await refetchAll();
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  async function updateActiveFilter(
+    channelId: string,
+    data: {
+      enabled?: boolean;
+      defaultLeverage?: number | null;
+      forcedLeverage?: number | null;
+      defaultEntryUsd?: string | null;
+      minLotBump?: boolean | null;
+    },
+    busy: string,
+  ) {
+    if (!activeCabinetId) {
+      setMsg('Выберите active cabinet, чтобы менять source-level настройки.');
+      return;
+    }
+    const filter = filterByChannelId.get(channelId);
+    if (!filter) {
+      setMsg('Для этого источника ещё нет фильтра в активном кабинете. Включите его в кабинете.');
+      return;
+    }
+    setBusyKey(busy);
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/proxy/cabinets/${activeCabinetId}/channel-filters/${filter.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(data),
       });
       if (!res.ok) {
         setMsg(`Ошибка: ${await res.text()}`);
@@ -467,7 +572,7 @@ export function UserbotPanel({
       </div>
 
       <div className="card">
-        <h2>Источники (legacy-style)</h2>
+        <h2>Источники (карточки)</h2>
         <div className="row" style={{ justifyContent: 'space-between', marginBottom: 10 }}>
           <input
             style={{ minWidth: 280 }}
@@ -504,51 +609,238 @@ export function UserbotPanel({
         {filteredChannels.length === 0 ? (
           <p style={{ color: 'var(--fg-dim)' }}>Источников по текущему фильтру нет.</p>
         ) : (
-          <table>
-            <thead>
-              <tr>
-                <th>Источник</th>
-                <th>Chat ID</th>
-                <th>Включён</th>
-                <th>Priority</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {filteredChannels.map((channel) => (
-                <tr key={channel.id}>
-                  <td>{formatSourceName(channel)}</td>
-                  <td>
-                    <code>{channel.chatId}</code>
-                  </td>
-                  <td>
-                    <button
-                      className="ghost"
-                      disabled={busyKey === `toggle:${channel.id}`}
-                      onClick={() => void onToggleChannel(channel)}
-                    >
-                      {channel.enabled ? 'on' : 'off'}
-                    </button>
-                  </td>
-                  <td>
-                    <input
-                      style={{ width: 90 }}
-                      type="number"
-                      min={0}
-                      max={100}
-                      defaultValue={channel.sourcePriority}
-                      onBlur={(e) => void onPriorityBlur(channel, e.target.value)}
-                    />
-                  </td>
-                  <td>
-                    <button className="danger" onClick={() => void onRemoveChannel(channel)}>
-                      ×
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <div style={{ display: 'grid', gap: 10 }}>
+            {filteredChannels.map((channel) => {
+              const filter = filterByChannelId.get(channel.id);
+              return (
+                <article key={channel.id} className="card" style={{ marginBottom: 0 }}>
+                  <div className="row" style={{ justifyContent: 'space-between' }}>
+                    <div>
+                      <strong>{formatSourceName(channel)}</strong>{' '}
+                      <span style={{ color: 'var(--fg-dim)' }}>
+                        <code>{channel.chatId}</code>
+                      </span>
+                    </div>
+                    <div className="row">
+                      <button
+                        className="ghost"
+                        disabled={busyKey === `toggle:${channel.id}`}
+                        onClick={() => void onToggleChannel(channel)}
+                      >
+                        source {channel.enabled ? 'on' : 'off'}
+                      </button>
+                      <button className="danger" onClick={() => void onRemoveChannel(channel)}>
+                        удалить
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="row" style={{ marginTop: 8 }}>
+                    <label>
+                      Priority
+                      <input
+                        style={{ width: 100, marginLeft: 8 }}
+                        type="number"
+                        min={0}
+                        max={100}
+                        defaultValue={channel.sourcePriority}
+                        onBlur={(e) => void onPriorityBlur(channel, e.target.value)}
+                      />
+                    </label>
+                    <span className="badge">active cabinet: {activeCabinetId ? 'set' : 'not selected'}</span>
+                    {filter ? (
+                      <span className="badge ok">filter linked</span>
+                    ) : (
+                      <span className="badge">filter missing</span>
+                    )}
+                  </div>
+
+                  {filter ? (
+                    <div className="row" style={{ marginTop: 10 }}>
+                      <button
+                        className="ghost"
+                        disabled={busyKey === `filter-enabled:${channel.id}`}
+                        onClick={() =>
+                          void updateActiveFilter(
+                            channel.id,
+                            { enabled: !filter.enabled },
+                            `filter-enabled:${channel.id}`,
+                          )
+                        }
+                      >
+                        cabinet filter {filter.enabled ? 'on' : 'off'}
+                      </button>
+                      <label>
+                        Default lev
+                        <input
+                          style={{ width: 90, marginLeft: 8 }}
+                          type="number"
+                          min={1}
+                          defaultValue={filter.defaultLeverage ?? ''}
+                          onBlur={(e) => {
+                            const v = e.target.value.trim();
+                            const next = v === '' ? null : Number.parseInt(v, 10);
+                            if (v !== '' && (!Number.isFinite(next) || next == null || next < 1)) return;
+                            if (next === filter.defaultLeverage) return;
+                            void updateActiveFilter(
+                              channel.id,
+                              { defaultLeverage: next },
+                              `filter-default-lev:${channel.id}`,
+                            );
+                          }}
+                        />
+                      </label>
+                      <label>
+                        Forced lev
+                        <input
+                          style={{ width: 90, marginLeft: 8 }}
+                          type="number"
+                          min={1}
+                          defaultValue={filter.forcedLeverage ?? ''}
+                          onBlur={(e) => {
+                            const v = e.target.value.trim();
+                            const next = v === '' ? null : Number.parseInt(v, 10);
+                            if (v !== '' && (!Number.isFinite(next) || next == null || next < 1)) return;
+                            if (next === filter.forcedLeverage) return;
+                            void updateActiveFilter(
+                              channel.id,
+                              { forcedLeverage: next },
+                              `filter-forced-lev:${channel.id}`,
+                            );
+                          }}
+                        />
+                      </label>
+                      <label>
+                        Entry USD
+                        <input
+                          style={{ width: 130, marginLeft: 8 }}
+                          defaultValue={filter.defaultEntryUsd ?? ''}
+                          onBlur={(e) => {
+                            const nextRaw = e.target.value.trim();
+                            const next = nextRaw === '' ? null : nextRaw;
+                            if (next === filter.defaultEntryUsd) return;
+                            void updateActiveFilter(
+                              channel.id,
+                              { defaultEntryUsd: next },
+                              `filter-entry:${channel.id}`,
+                            );
+                          }}
+                        />
+                      </label>
+                      <label>
+                        Min lot bump
+                        <select
+                          style={{ marginLeft: 8 }}
+                          value={
+                            filter.minLotBump == null ? '' : filter.minLotBump ? 'true' : 'false'
+                          }
+                          onChange={(e) => {
+                            const raw = e.target.value;
+                            const next = raw === '' ? null : raw === 'true';
+                            if (next === filter.minLotBump) return;
+                            void updateActiveFilter(
+                              channel.id,
+                              { minLotBump: next },
+                              `filter-minlot:${channel.id}`,
+                            );
+                          }}
+                        >
+                          <option value="">inherit</option>
+                          <option value="false">off</option>
+                          <option value="true">on</option>
+                        </select>
+                      </label>
+                    </div>
+                  ) : (
+                    <p style={{ color: 'var(--fg-dim)', marginTop: 8 }}>
+                      Для этого источника нет фильтра в активном кабинете. Создайте/включите его в кабинете:
+                      {' '}
+                      {activeCabinetId ? <Link href={`/cabinets/${activeCabinetId}`}>открыть кабинет</Link> : 'выберите active cabinet'}
+                    </p>
+                  )}
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <h2>Сообщения из источников</h2>
+        <div className="row" style={{ marginBottom: 10 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <input
+              type="checkbox"
+              checked={onlySignals}
+              onChange={(e) => setOnlySignals(e.target.checked)}
+            />
+            Только сигналы
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <input
+              type="checkbox"
+              checked={groupBySource}
+              onChange={(e) => setGroupBySource(e.target.checked)}
+            />
+            Группировать по источникам
+          </label>
+        </div>
+
+        {filteredRecentEvents.length === 0 ? (
+          <p style={{ color: 'var(--fg-dim)' }}>Событий по текущему фильтру нет.</p>
+        ) : groupBySource ? (
+          <div style={{ display: 'grid', gap: 10 }}>
+            {recentBySource.map((group) => (
+              <details key={group.chatId} className="card" style={{ marginBottom: 0 }}>
+                <summary style={{ cursor: 'pointer' }}>
+                  <strong>{group.title}</strong>{' '}
+                  <span style={{ color: 'var(--fg-dim)' }}>
+                    ({group.chatId}) · {group.rows.length} сообщ.
+                  </span>
+                </summary>
+                <div style={{ display: 'grid', gap: 8, marginTop: 10 }}>
+                  {group.rows.map((event) => (
+                    <div key={event.id} className="card" style={{ marginBottom: 0 }}>
+                      <div className="row" style={{ justifyContent: 'space-between' }}>
+                        <div style={{ color: 'var(--fg-dim)' }}>#{event.messageId}</div>
+                        <div style={{ color: 'var(--fg-dim)' }}>
+                          {new Date(event.createdAt).toLocaleString()}
+                        </div>
+                      </div>
+                      <p style={{ margin: '8px 0' }}>{cutText(event.text)}</p>
+                      <div className="row">
+                        <span className="badge">ingest: {event.status}</span>
+                        <span className="badge">{event.classification ?? 'classification:none'}</span>
+                        <span className="badge">{event.draftStatus ?? 'draft:none'}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </details>
+            ))}
+          </div>
+        ) : (
+          <div style={{ display: 'grid', gap: 10 }}>
+            {filteredRecentEvents.map((event) => (
+              <div key={event.id} className="card" style={{ marginBottom: 0 }}>
+                <div className="row" style={{ justifyContent: 'space-between' }}>
+                  <div>
+                    <strong>{event.chatTitle ?? event.chatId}</strong>{' '}
+                    <span style={{ color: 'var(--fg-dim)' }}>
+                      ({event.chatId} / {event.messageId})
+                    </span>
+                  </div>
+                  <div style={{ color: 'var(--fg-dim)' }}>{new Date(event.createdAt).toLocaleString()}</div>
+                </div>
+                <p style={{ margin: '8px 0' }}>{cutText(event.text)}</p>
+                <div className="row">
+                  <span className="badge">ingest: {event.status}</span>
+                  <span className="badge">{event.classification ?? 'classification:none'}</span>
+                  <span className="badge">{event.draftStatus ?? 'draft:none'}</span>
+                </div>
+              </div>
+            ))}
+          </div>
         )}
       </div>
 
@@ -596,35 +888,6 @@ export function UserbotPanel({
               ))}
             </tbody>
           </table>
-        )}
-      </div>
-
-      <div className="card">
-        <h2>Recent ingest activity</h2>
-        {recentEvents.length === 0 ? (
-          <p style={{ color: 'var(--fg-dim)' }}>Событий пока нет.</p>
-        ) : (
-          <div style={{ display: 'grid', gap: 10 }}>
-            {recentEvents.map((event) => (
-              <div key={event.id} className="card" style={{ marginBottom: 0 }}>
-                <div className="row" style={{ justifyContent: 'space-between' }}>
-                  <div>
-                    <strong>{event.chatTitle ?? event.chatId}</strong>{' '}
-                    <span style={{ color: 'var(--fg-dim)' }}>
-                      ({event.chatId} / {event.messageId})
-                    </span>
-                  </div>
-                  <div style={{ color: 'var(--fg-dim)' }}>{new Date(event.createdAt).toLocaleString()}</div>
-                </div>
-                <p style={{ margin: '8px 0' }}>{cutText(event.text)}</p>
-                <div className="row">
-                  <span className="badge">ingest: {event.status}</span>
-                  <span className="badge">{event.classification ?? 'classification:none'}</span>
-                  <span className="badge">{event.draftStatus ?? 'draft:none'}</span>
-                </div>
-              </div>
-            ))}
-          </div>
         )}
       </div>
     </>
