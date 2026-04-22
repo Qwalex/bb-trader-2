@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { apiFetch, type ApiError } from '@/lib/api';
 import { TopNav } from '@/components/nav';
+import { AdminPanel } from './admin-panel';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,19 +20,19 @@ export default async function AdminPage() {
   }
   if (me.role !== 'admin') redirect('/');
 
+  const [settings, logs] = await Promise.all([
+    apiFetch<Array<{ key: string; value: string }>>('/admin/global-settings'),
+    apiFetch<Array<{ id: string; level: string; category: string; message: string; createdAt: string }>>(
+      '/admin/logs?limit=200',
+    ),
+  ]);
+
   return (
     <>
       <TopNav />
       <div className="container">
         <h1>Admin</h1>
-        <div className="card">
-          <h2>Глобальные настройки</h2>
-          <p style={{ color: 'var(--fg-dim)' }}>
-            PUBLIC_SIGNUP_ENABLED, фильтры паттернов, диагностические запуски —
-            TODO. Сейчас все admin-операции выполняются через прямые SQL-команды
-            или API (`/admin/*`) endpoints (см. apps/api).
-          </p>
-        </div>
+        <AdminPanel initialSettings={settings} initialLogs={logs} />
       </div>
     </>
   );

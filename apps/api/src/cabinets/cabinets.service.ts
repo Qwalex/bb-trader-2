@@ -2,8 +2,10 @@ import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import type { PrismaClient } from '@repo/shared-prisma';
 import { getQueueClient } from '@repo/shared-queue';
 import {
+  type CabinetChannelFilterDto,
   PollCabinetPositionsPayload,
   QUEUE_NAMES,
+  type UpdateCabinetChannelFilterDto,
   encryptSecret,
   type CabinetDto,
   type CreateCabinetDto,
@@ -165,6 +167,54 @@ export class CabinetsService {
         }),
       ),
     );
+  }
+
+  async listChannelFilters(
+    userId: string,
+    cabinetId: string,
+  ): Promise<CabinetChannelFilterDto[]> {
+    await this.assertOwned(userId, cabinetId);
+    const rows = await this.prisma.cabinetChannelFilter.findMany({
+      where: { cabinetId },
+      include: { userbotChannel: true },
+      orderBy: [{ enabled: 'desc' }, { updatedAt: 'desc' }],
+    });
+    return rows.map((row) => ({
+      id: row.id,
+      cabinetId: row.cabinetId,
+      userbotChannelId: row.userbotChannelId,
+      chatId: row.userbotChannel.chatId,
+      title: row.userbotChannel.title,
+      enabled: row.enabled,
+      defaultLeverage: row.defaultLeverage,
+      forcedLeverage: row.forcedLeverage,
+      defaultEntryUsd: row.defaultEntryUsd,
+      minLotBump: row.minLotBump,
+    }));
+  }
+
+  async updateChannelFilter(
+    userId: string,
+    cabinetId: string,
+    filterId: string,
+    dto: UpdateCabinetChannelFilterDto,
+  ): Promise<void> {
+    await this.assertOwned(userId, cabinetId);
+    const existing = await this.prisma.cabinetChannelFilter.findFirst({
+      where: { id: filterId, cabinetId },
+      select: { id: true },
+    });
+    if (!existing) throw new NotFoundException('Channel filter not found');
+    await this.prisma.cabinetChannelFilter.update({
+      where: { id: filterId },
+      data: {
+        enabled: dto.enabled,
+        defaultLeverage: dto.defaultLeverage,
+        forcedLeverage: dto.forcedLeverage,
+        defaultEntryUsd: dto.defaultEntryUsd,
+        minLotBump: dto.minLotBump,
+      },
+    });
   }
 
   private async assertOwned(userId: string, cabinetId: string): Promise<void> {

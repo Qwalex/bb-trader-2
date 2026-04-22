@@ -31,6 +31,7 @@ export async function TopNav() {
           <Link href="/">Dashboard</Link>
           <Link href="/cabinets">Кабинеты</Link>
           <Link href="/userbot">Userbot</Link>
+          <Link href="/trades">Trades</Link>
           {me.role === 'admin' && <Link href="/admin">Admin</Link>}
           <span className="spacer" />
           <span style={{ color: 'var(--fg-dim)' }}>

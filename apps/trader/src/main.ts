@@ -3,6 +3,7 @@ import { getQueueClient, disconnectQueueClient } from '@repo/shared-queue';
 import {
   ExecuteSignalPayload,
   PollCabinetPositionsPayload,
+  RecalcClosedPnlPayload,
   QUEUE_NAMES,
 } from '@repo/shared-ts';
 import { loadConfig } from './config.js';
@@ -12,6 +13,7 @@ import { BybitOrderService } from './bybit/order-service.js';
 import { BybitPositionService } from './bybit/position-service.js';
 import { SignalFanoutService } from './fanout.js';
 import { handlePollCabinetPositions } from './poll-worker.js';
+import { handleRecalcClosedPnl } from './recalc-worker.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -65,10 +67,28 @@ async function main(): Promise<void> {
     },
   });
 
+  const recalcClosedPnlWorker = await queue.work({
+    queue: QUEUE_NAMES.recalcClosedPnl,
+    schema: RecalcClosedPnlPayload,
+    pollingIntervalSeconds: 10,
+    handlerTimeoutSeconds: 600,
+    handler: async (payload) => {
+      await handleRecalcClosedPnl(
+        { prisma, registry, logger },
+        {
+          jobId: payload.jobId,
+          cabinetId: payload.cabinetId ?? null,
+          dryRun: payload.dryRun ?? true,
+          limit: payload.limit ?? 500,
+        },
+      );
+    },
+  });
+
   await queue.schedule(QUEUE_NAMES.pollCabinetPositions, config.POLL_CABINET_POSITIONS_CRON);
 
   logger.info(
-    { executeSignalWorker, pollWorker, clientCacheMax: registry.size() },
+    { executeSignalWorker, pollWorker, recalcClosedPnlWorker, clientCacheMax: registry.size() },
     'trader.ready',
   );
 
@@ -76,6 +96,7 @@ async function main(): Promise<void> {
     logger.info({ signal }, 'trader.shutdown.begin');
     await queue.offWork(executeSignalWorker);
     await queue.offWork(pollWorker);
+    await queue.offWork(recalcClosedPnlWorker);
     await disconnectQueueClient();
     await disconnectPrisma();
     logger.info('trader.shutdown.done');

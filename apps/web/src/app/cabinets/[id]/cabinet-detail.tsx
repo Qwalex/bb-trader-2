@@ -17,6 +17,19 @@ interface Setting {
   updatedAt: string;
 }
 
+interface ChannelFilter {
+  id: string;
+  cabinetId: string;
+  userbotChannelId: string;
+  chatId: string;
+  title: string;
+  enabled: boolean;
+  defaultLeverage: number | null;
+  forcedLeverage: number | null;
+  defaultEntryUsd: string | null;
+  minLotBump: boolean | null;
+}
+
 const KNOWN_SETTINGS: Array<{ key: string; description: string; placeholder?: string }> = [
   { key: 'ENTRY_USD', description: 'Размер входа по умолчанию, USD', placeholder: '10' },
   { key: 'DEFAULT_LEVERAGE', description: 'Плечо по умолчанию', placeholder: '10' },
@@ -28,14 +41,17 @@ const KNOWN_SETTINGS: Array<{ key: string; description: string; placeholder?: st
 export function CabinetDetail({
   cabinet,
   initialSettings,
+  initialChannelFilters,
 }: {
   cabinet: Cabinet;
   initialSettings: Setting[];
+  initialChannelFilters: ChannelFilter[];
 }) {
   const [apiKey, setApiKey] = useState('');
   const [apiSecret, setApiSecret] = useState('');
   const [target, setTarget] = useState<'mainnet' | 'testnet'>(cabinet.network);
   const [settings, setSettings] = useState<Setting[]>(initialSettings);
+  const [channelFilters, setChannelFilters] = useState<ChannelFilter[]>(initialChannelFilters);
   const [msg, setMsg] = useState<string | null>(null);
 
   async function onUpsertKey(e: React.FormEvent) {
@@ -81,6 +97,21 @@ export function CabinetDetail({
       body: JSON.stringify({ values }),
     });
     setMsg(res.ok ? 'Настройки сохранены.' : `Ошибка: ${await res.text()}`);
+  }
+
+  async function onToggleChannelFilter(filter: ChannelFilter) {
+    const res = await fetch(`/api/proxy/cabinets/${cabinet.id}/channel-filters/${filter.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: !filter.enabled }),
+    });
+    if (!res.ok) {
+      setMsg(`Ошибка channel filter: ${await res.text()}`);
+      return;
+    }
+    setChannelFilters((prev) =>
+      prev.map((f) => (f.id === filter.id ? { ...f, enabled: !f.enabled } : f)),
+    );
   }
 
   const getValue = (key: string) => settings.find((s) => s.key === key)?.value ?? '';
@@ -160,6 +191,46 @@ export function CabinetDetail({
             <button type="submit">Сохранить настройки</button>
           </div>
         </form>
+      </div>
+
+      <div className="card">
+        <h2>Source-level filters</h2>
+        {channelFilters.length === 0 ? (
+          <p style={{ color: 'var(--fg-dim)' }}>Для кабинета пока нет привязанных фильтров источников.</p>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>Source</th>
+                <th>Chat ID</th>
+                <th>Enabled</th>
+                <th>Default lev</th>
+                <th>Forced lev</th>
+                <th>Entry USD</th>
+                <th>Min lot bump</th>
+              </tr>
+            </thead>
+            <tbody>
+              {channelFilters.map((filter) => (
+                <tr key={filter.id}>
+                  <td>{filter.title}</td>
+                  <td>
+                    <code>{filter.chatId}</code>
+                  </td>
+                  <td>
+                    <button className="ghost" onClick={() => void onToggleChannelFilter(filter)}>
+                      {filter.enabled ? 'on' : 'off'}
+                    </button>
+                  </td>
+                  <td>{filter.defaultLeverage ?? '—'}</td>
+                  <td>{filter.forcedLeverage ?? '—'}</td>
+                  <td>{filter.defaultEntryUsd ?? '—'}</td>
+                  <td>{filter.minLotBump == null ? '—' : filter.minLotBump ? 'yes' : 'no'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </>
   );

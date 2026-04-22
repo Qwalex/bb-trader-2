@@ -25,8 +25,7 @@ export class BybitPositionService {
         });
       }
 
-      // MVP: не ходим за позициями, не применяем TP/SL-шаги.
-      // TODO(port): портировать apply-tp-sl-step и reconcile из bb-trader.
+      await this.reconcileSignals(cabinetId, client);
       await this.markBybitVerified(cabinetId, null);
     } catch (error) {
       const message = errorMessage(error);
@@ -35,6 +34,110 @@ export class BybitPositionService {
         { cabinetId, error: message },
         'trader.position.poll_failed',
       );
+    }
+  }
+
+  private async reconcileSignals(cabinetId: string, client: BybitClientRegistry['getClient'] extends (...args: any[]) => Promise<infer T> ? T : never): Promise<void> {
+    const activeSignals = await this.prisma.signal.findMany({
+      where: {
+        cabinetId,
+        deletedAt: null,
+        status: { in: ['PENDING', 'OPEN', 'ORDERS_PLACED'] },
+      },
+      select: {
+        id: true,
+        pair: true,
+        direction: true,
+      },
+      take: 200,
+      orderBy: { createdAt: 'asc' },
+    });
+    for (const signal of activeSignals) {
+      const [positions, activeOrders] = await Promise.all([
+        client.getPositionInfo({ category: 'linear', symbol: signal.pair }),
+        client.getActiveOrders({ category: 'linear', symbol: signal.pair }),
+      ]);
+      const expectedSide = signal.direction === 'BUY' ? 'Buy' : 'Sell';
+      const hasPosition = Boolean(
+        positions.result?.list?.some((p) => p.side === expectedSide && Number(p.size ?? 0) > 0),
+      );
+      const exchangeOrders = activeOrders.result?.list ?? [];
+      await this.syncOrderStatuses(signal.id, exchangeOrders);
+      if (hasPosition) {
+        await this.prisma.signal.update({
+          where: { id: signal.id },
+          data: { status: 'OPEN' },
+        });
+        continue;
+      }
+      const hasOpenOrders = exchangeOrders.some((o) => !o.reduceOnly);
+      if (hasOpenOrders) {
+        await this.prisma.signal.update({
+          where: { id: signal.id },
+          data: { status: 'ORDERS_PLACED' },
+        });
+        continue;
+      }
+      const closedPnl = await this.fetchClosedPnl(client, signal.pair);
+      const finalStatus =
+        closedPnl == null ? 'FAILED' : closedPnl > 0 ? 'CLOSED_WIN' : closedPnl < 0 ? 'CLOSED_LOSS' : 'CLOSED_MIXED';
+      await this.prisma.signal.update({
+        where: { id: signal.id },
+        data: {
+          status: finalStatus,
+          realizedPnl: closedPnl,
+          closedAt: new Date(),
+        },
+      });
+    }
+  }
+
+  private async syncOrderStatuses(
+    signalId: string,
+    exchangeOrders: Array<{ orderId?: string | null; orderStatus?: string | null }>,
+  ): Promise<void> {
+    const byId = new Map<string, string>();
+    for (const order of exchangeOrders) {
+      if (order.orderId && order.orderStatus) {
+        byId.set(order.orderId, order.orderStatus);
+      }
+    }
+    const dbOrders = await this.prisma.order.findMany({
+      where: { signalId, bybitOrderId: { not: null } },
+      select: { id: true, bybitOrderId: true, status: true },
+    });
+    for (const dbOrder of dbOrders) {
+      if (!dbOrder.bybitOrderId) continue;
+      const next = byId.get(dbOrder.bybitOrderId);
+      if (!next || next === dbOrder.status) continue;
+      await this.prisma.order.update({
+        where: { id: dbOrder.id },
+        data: {
+          status: next,
+          filledAt: next === 'FILLED' ? new Date() : null,
+        },
+      });
+    }
+  }
+
+  private async fetchClosedPnl(client: any, symbol: string): Promise<number | null> {
+    try {
+      const now = Date.now();
+      const res = await client.getClosedPnL({
+        category: 'linear',
+        symbol,
+        startTime: now - 7 * 24 * 60 * 60 * 1000,
+        endTime: now,
+        limit: 50,
+      });
+      const rows = res.result?.list ?? [];
+      if (!rows.length) return null;
+      return rows.reduce((acc: number, row: { closedPnl?: string | number | null }) => {
+        const pnl = Number(row.closedPnl ?? 0);
+        return Number.isFinite(pnl) ? acc + pnl : acc;
+      }, 0);
+    } catch {
+      return null;
     }
   }
 

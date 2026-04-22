@@ -22,6 +22,19 @@ interface Setting {
   updatedAt: string;
 }
 
+interface ChannelFilter {
+  id: string;
+  cabinetId: string;
+  userbotChannelId: string;
+  chatId: string;
+  title: string;
+  enabled: boolean;
+  defaultLeverage: number | null;
+  forcedLeverage: number | null;
+  defaultEntryUsd: string | null;
+  minLotBump: boolean | null;
+}
+
 export default async function CabinetPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   try {
@@ -41,7 +54,10 @@ export default async function CabinetPage({ params }: { params: Promise<{ id: st
   }
   if (!cabinet) notFound();
 
-  const settings = await apiFetch<Setting[]>(`/cabinets/${id}/settings`);
+  const [settings, channelFilters] = await Promise.all([
+    apiFetch<Setting[]>(`/cabinets/${id}/settings`),
+    apiFetch<ChannelFilter[]>(`/cabinets/${id}/channel-filters`),
+  ]);
 
   return (
     <>
@@ -51,7 +67,7 @@ export default async function CabinetPage({ params }: { params: Promise<{ id: st
           {cabinet.displayName}{' '}
           <small style={{ color: 'var(--fg-dim)' }}>({cabinet.slug})</small>
         </h1>
-        <CabinetDetail cabinet={cabinet} initialSettings={settings} />
+        <CabinetDetail cabinet={cabinet} initialSettings={settings} initialChannelFilters={channelFilters} />
       </div>
     </>
   );

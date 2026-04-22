@@ -1,10 +1,11 @@
 import { getPrisma, disconnectPrisma } from '@repo/shared-prisma';
 import { getQueueClient, disconnectQueueClient } from '@repo/shared-queue';
-import { QUEUE_NAMES } from '@repo/shared-ts';
+import { DiagnosticsRunPayload, QUEUE_NAMES } from '@repo/shared-ts';
 import { loadConfig } from './config.js';
 import { createLogger } from './logger.js';
 import { OpenRouterClient } from './openrouter.js';
 import { IngestWorker } from './ingest-worker.js';
+import { handleDiagnosticsRun } from './diagnostics-worker.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -20,6 +21,7 @@ async function main(): Promise<void> {
 
   // pg-boss v10 требует явного createQueue
   await queue.createQueue(QUEUE_NAMES.executeSignal);
+  await queue.createQueue(QUEUE_NAMES.diagnosticsRun);
 
   const openrouter = new OpenRouterClient({
     apiKey: config.OPENROUTER_API_KEY,
@@ -37,9 +39,20 @@ async function main(): Promise<void> {
     batchSize: config.CLASSIFIER_BATCH_SIZE,
   });
 
+  const diagnosticsWorker = await queue.work({
+    queue: QUEUE_NAMES.diagnosticsRun,
+    schema: DiagnosticsRunPayload,
+    pollingIntervalSeconds: 5,
+    handlerTimeoutSeconds: 600,
+    handler: async (payload) => {
+      await handleDiagnosticsRun({ prisma, logger, openrouter }, payload);
+    },
+  });
+
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'classifier.shutdown.begin');
     worker.stop();
+    await queue.offWork(diagnosticsWorker);
     await disconnectQueueClient();
     await disconnectPrisma();
     logger.info('classifier.shutdown.done');

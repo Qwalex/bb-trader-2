@@ -37,16 +37,27 @@ export async function classifyByPatterns(
     return { classification: 'ignore', matchedPatternId: null, matchedGroup: null };
   }
 
-  const patterns = await prisma.tgUserbotFilterPattern.findMany({
-    where: { enabled: true },
-    select: {
-      id: true,
-      groupName: true,
-      kind: true,
-      pattern: true,
-      requiresQuote: true,
-    },
-  });
+  const [patterns, examples] = await Promise.all([
+    prisma.tgUserbotFilterPattern.findMany({
+      where: { enabled: true },
+      select: {
+        id: true,
+        groupName: true,
+        kind: true,
+        pattern: true,
+        requiresQuote: true,
+      },
+    }),
+    prisma.tgUserbotFilterExample.findMany({
+      where: { enabled: true },
+      select: {
+        groupName: true,
+        kind: true,
+        example: true,
+        requiresQuote: true,
+      },
+    }),
+  ]);
 
   let best: ClassifyResult = {
     classification: 'ignore',
@@ -73,5 +84,42 @@ export async function classifyByPatterns(
     }
   }
 
+  // Fallback: weak fuzzy match by examples.
+  if (bestPriority < 0) {
+    for (const ex of examples) {
+      if (ex.requiresQuote && !input.hasReply) continue;
+      const score = overlapScore(input.text, ex.example);
+      if (score < 0.55) continue;
+      const kind = ex.kind as Classification;
+      const priority = KIND_PRIORITY[kind] ?? -1;
+      if (priority > bestPriority) {
+        bestPriority = priority;
+        best = { classification: kind, matchedPatternId: null, matchedGroup: ex.groupName };
+      }
+    }
+  }
+
   return best;
+}
+
+function overlapScore(input: string, example: string): number {
+  const left = tokenize(input);
+  const right = tokenize(example);
+  if (!left.size || !right.size) return 0;
+  let overlap = 0;
+  for (const token of left) {
+    if (right.has(token)) overlap += 1;
+  }
+  return overlap / Math.max(left.size, right.size);
+}
+
+function tokenize(text: string): Set<string> {
+  return new Set(
+    text
+      .toLowerCase()
+      .replace(/[^a-zа-я0-9_ ]/giu, ' ')
+      .split(/\s+/)
+      .map((s) => s.trim())
+      .filter((s) => s.length >= 3),
+  );
 }

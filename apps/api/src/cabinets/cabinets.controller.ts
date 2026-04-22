@@ -14,6 +14,7 @@ import {
 } from '@nestjs/common';
 import {
   CreateCabinetDto,
+  UpdateCabinetChannelFilterDto,
   UpdateCabinetDto,
   UpdateSettingsDto,
   UpsertBybitKeyDto,
@@ -86,6 +87,24 @@ export class CabinetsController {
     const parsed = UpdateSettingsDto.safeParse(body);
     if (!parsed.success) throw new BadRequestException(parsed.error.issues);
     await this.cabinets.setSettings(req.authUserId!, id, parsed.data.values);
+    return { ok: true };
+  }
+
+  @Get(':id/channel-filters')
+  listChannelFilters(@Req() req: RequestWithUser, @Param('id') id: string) {
+    return this.cabinets.listChannelFilters(req.authUserId!, id);
+  }
+
+  @Patch(':id/channel-filters/:filterId')
+  async updateChannelFilter(
+    @Req() req: RequestWithUser,
+    @Param('id') id: string,
+    @Param('filterId') filterId: string,
+    @Body() body: unknown,
+  ) {
+    const parsed = UpdateCabinetChannelFilterDto.safeParse(body);
+    if (!parsed.success) throw new BadRequestException(parsed.error.issues);
+    await this.cabinets.updateChannelFilter(req.authUserId!, id, filterId, parsed.data);
     return { ok: true };
   }
 }

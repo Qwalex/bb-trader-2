@@ -9,6 +9,9 @@ interface Summary {
   activeCabinetId: string | null;
   signalsCount: number;
   openSignalsCount: number;
+  closedSignalsCount: number;
+  winrate: number | null;
+  pnlTotal: number;
   balance: { totalUsd: string; at: string } | null;
 }
 
@@ -29,6 +32,17 @@ interface Cabinet {
   enabled: boolean;
 }
 
+interface PnlSeriesPoint {
+  day: string;
+  pnl: number;
+}
+
+interface SourceStat {
+  sourceChatId: string | null;
+  count: number;
+  pnl: number;
+}
+
 export default async function HomePage() {
   try {
     await apiFetch('/auth/me');
@@ -42,6 +56,12 @@ export default async function HomePage() {
   const summary = await apiFetch<Summary>('/dashboard/summary');
   const recent = summary.activeCabinetId
     ? await apiFetch<RecentSignal[]>('/dashboard/signals?limit=20')
+    : [];
+  const pnlSeries = summary.activeCabinetId
+    ? await apiFetch<PnlSeriesPoint[]>('/dashboard/pnl-series?days=30')
+    : [];
+  const sourceStats = summary.activeCabinetId
+    ? await apiFetch<SourceStat[]>('/dashboard/source-stats')
     : [];
 
   return (
@@ -67,6 +87,10 @@ export default async function HomePage() {
                 <div style={{ fontSize: 24 }}>{summary.openSignalsCount}</div>
               </div>
               <div className="card">
+                <h2>Закрыто</h2>
+                <div style={{ fontSize: 24 }}>{summary.closedSignalsCount}</div>
+              </div>
+              <div className="card">
                 <h2>Баланс (USDT)</h2>
                 <div style={{ fontSize: 24 }}>
                   {summary.balance ? summary.balance.totalUsd : '—'}
@@ -75,6 +99,67 @@ export default async function HomePage() {
                   <small style={{ color: 'var(--fg-dim)' }}>
                     снято {new Date(summary.balance.at).toLocaleString()}
                   </small>
+                )}
+              </div>
+              <div className="card">
+                <h2>Winrate</h2>
+                <div style={{ fontSize: 24 }}>
+                  {summary.winrate == null ? '—' : `${summary.winrate.toFixed(1)}%`}
+                </div>
+              </div>
+              <div className="card">
+                <h2>Total PnL</h2>
+                <div style={{ fontSize: 24 }}>{summary.pnlTotal.toFixed(2)}</div>
+              </div>
+            </div>
+
+            <div className="grid">
+              <div className="card">
+                <h2>PnL по дням (30d)</h2>
+                {pnlSeries.length === 0 ? (
+                  <p style={{ color: 'var(--fg-dim)' }}>Нет данных.</p>
+                ) : (
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>День</th>
+                        <th>PnL</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pnlSeries.map((point) => (
+                        <tr key={point.day}>
+                          <td>{point.day}</td>
+                          <td>{point.pnl.toFixed(2)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+              <div className="card">
+                <h2>Топ источников</h2>
+                {sourceStats.length === 0 ? (
+                  <p style={{ color: 'var(--fg-dim)' }}>Нет данных.</p>
+                ) : (
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Source chat</th>
+                        <th>Сигналы</th>
+                        <th>PnL</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sourceStats.map((source) => (
+                        <tr key={source.sourceChatId ?? 'unknown'}>
+                          <td>{source.sourceChatId ?? 'unknown'}</td>
+                          <td>{source.count}</td>
+                          <td>{source.pnl.toFixed(2)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 )}
               </div>
             </div>

@@ -23,4 +23,21 @@ export class DashboardController {
     const parsedLimit = limit ? Number.parseInt(limit, 10) : undefined;
     return this.dashboard.recentSignals(req.authUserId!, id, parsedLimit);
   }
+
+  @Get('pnl-series')
+  pnlSeries(
+    @Req() req: RequestWithUser,
+    @Query('cabinetId') cabinetId?: string,
+    @Query('days') days?: string,
+  ) {
+    const id = cabinetId ?? req.activeCabinetId ?? null;
+    const parsedDays = days ? Number.parseInt(days, 10) : undefined;
+    return this.dashboard.pnlSeries(req.authUserId!, id, parsedDays);
+  }
+
+  @Get('source-stats')
+  sourceStats(@Req() req: RequestWithUser, @Query('cabinetId') cabinetId?: string) {
+    const id = cabinetId ?? req.activeCabinetId ?? null;
+    return this.dashboard.sourceStats(req.authUserId!, id);
+  }
 }

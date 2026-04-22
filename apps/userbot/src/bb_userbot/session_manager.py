@@ -142,6 +142,15 @@ class SessionManager:
         message = event.message
         text: str | None = getattr(message, "message", None) or None
         message_id = str(message.id)
+        media_kind: str | None = None
+        if getattr(message, "photo", None):
+            media_kind = "photo"
+        elif getattr(message, "voice", None):
+            media_kind = "voice"
+        elif getattr(message, "audio", None):
+            media_kind = "audio"
+        elif getattr(message, "video", None):
+            media_kind = "video"
 
         reply_chat_id: str | None = None
         reply_msg_id: str | None = None
@@ -170,7 +179,10 @@ class SessionManager:
             reply_to_chat_id=reply_chat_id,
             reply_to_message_id=reply_msg_id,
             reply_to_text=reply_text,
-            raw=None,
+            raw={
+                "mediaKind": media_kind,
+                "hasReply": bool(message.is_reply),
+            },
         )
         if ingest_id is None:
             return
