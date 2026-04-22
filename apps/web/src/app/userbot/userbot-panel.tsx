@@ -101,6 +101,24 @@ export function UserbotPanel({
     return null;
   }
 
+  async function waitForSessionTransition(
+    timeoutMs = 120_000,
+    pollMs = 2_000,
+  ): Promise<Session | null> {
+    const started = Date.now();
+    while (Date.now() - started < timeoutMs) {
+      await new Promise((r) => setTimeout(r, pollMs));
+      const res = await fetch('/api/proxy/userbot/session', { cache: 'no-store' });
+      if (!res.ok) continue;
+      const next = (await res.json()) as Session;
+      setSession(next);
+      if (next.status === 'connected' || next.status === 'failed' || next.status === 'error') {
+        return next;
+      }
+    }
+    return null;
+  }
+
   async function onStartQrLogin() {
     setMsg(null);
     const cmd = await enqueue('login_qr');
@@ -112,6 +130,19 @@ export function UserbotPanel({
       setMsg(`Ошибка: ${result.error}`);
     } else if (qrFromResult?.url) {
       setMsg('QR получен. Отсканируйте его в Telegram и дождитесь статуса connected.');
+      const finalSession = await waitForSessionTransition();
+      if (finalSession?.status === 'connected') {
+        setMsg('Сессия успешно подключена.');
+        setQr(null);
+      } else if (finalSession?.lastError) {
+        setMsg(`Ошибка входа: ${finalSession.lastError}`);
+      } else if (finalSession?.status === 'failed' || finalSession?.status === 'error') {
+        setMsg(`Ошибка входа: статус ${finalSession.status}`);
+      } else {
+        setMsg(
+          'QR отсканирован, но подтверждение входа не получено вовремя. Проверьте логи userbot (возможен 2FA или истёк QR).',
+        );
+      }
     } else if (result?.status === 'done') {
       setMsg('Команда login_qr выполнена, ожидаем подтверждение входа в Telegram.');
     }

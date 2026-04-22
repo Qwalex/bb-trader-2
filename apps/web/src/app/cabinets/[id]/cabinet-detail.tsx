@@ -45,9 +45,10 @@ export function CabinetDetail({
       method: 'PUT',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        network: target,
-        apiKey,
-        apiSecret,
+        testnet: target === 'testnet',
+        ...(target === 'mainnet'
+          ? { apiKeyMainnet: apiKey, apiSecretMainnet: apiSecret }
+          : { apiKeyTestnet: apiKey, apiSecretTestnet: apiSecret }),
       }),
     });
     if (res.ok) {
