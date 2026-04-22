@@ -58,6 +58,15 @@ export async function handleRecalcClosedPnl(
     scanned += 1;
     try {
       const client = await registry.getClient(signal.cabinetId);
+      const orderIds = (
+        await prisma.order.findMany({
+          where: { signalId: signal.id, bybitOrderId: { not: null } },
+          select: { bybitOrderId: true },
+        })
+      )
+        .map((o) => o.bybitOrderId)
+        .filter((id): id is string => Boolean(id));
+      if (orderIds.length === 0) continue;
       const now = Date.now();
       const closed = await client.getClosedPnL({
         category: 'linear',
@@ -68,7 +77,11 @@ export async function handleRecalcClosedPnl(
       });
       const rows = closed.result?.list ?? [];
       if (!rows.length) continue;
-      const pnl = rows.reduce((acc: number, row: { closedPnl?: string | number | null }) => {
+      const filtered = rows.filter((row: { orderId?: string | null }) =>
+        row.orderId ? orderIds.includes(row.orderId) : false,
+      );
+      if (!filtered.length) continue;
+      const pnl = filtered.reduce((acc: number, row: { closedPnl?: string | number | null }) => {
         const val = Number(row.closedPnl ?? 0);
         return Number.isFinite(val) ? acc + val : acc;
       }, 0);

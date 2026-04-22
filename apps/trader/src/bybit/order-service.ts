@@ -36,12 +36,16 @@ export class BybitOrderService {
 
   async placeSignalOrders(input: PlaceSignalOrdersInput): Promise<void> {
     const client = await this.registry.getClient(input.cabinetId);
+    const placedBybitOrderIds: string[] = [];
     try {
       await this.assertNoConflictingExposure(client, input);
       await this.setLeverage(client, input.pair, input.leverage);
-      await this.placeEntries(client, input);
-      await this.placeTpSl(client, input);
+      const entryOrderIds = await this.placeEntries(client, input);
+      placedBybitOrderIds.push(...entryOrderIds);
+      const tpOrderIds = await this.placeTpSl(client, input);
+      placedBybitOrderIds.push(...tpOrderIds);
     } catch (error) {
+      await this.rollbackOrders(client, input.signalId, input.pair, placedBybitOrderIds);
       this.logger.error(
         { signalId: input.signalId, error: errorMessage(error) },
         'trader.order.place_failed',
@@ -89,13 +93,14 @@ export class BybitOrderService {
     }
   }
 
-  private async placeEntries(client: RestClientV5, input: PlaceSignalOrdersInput): Promise<void> {
+  private async placeEntries(client: RestClientV5, input: PlaceSignalOrdersInput): Promise<string[]> {
     const side = input.direction === 'BUY' ? 'Buy' : 'Sell';
     if (input.entries.length === 0) throw new Error('no entry prices in signal');
     const normalizedEntries = [...input.entries].sort((a, b) =>
       input.direction === 'BUY' ? b - a : a - b,
     );
     const entryChunks = splitOrderUsd(input.orderUsd, normalizedEntries.length);
+    const placed: string[] = [];
     for (let i = 0; i < normalizedEntries.length; i += 1) {
       const entryPrice = normalizedEntries[i];
       if (entryPrice == null) continue;
@@ -123,15 +128,18 @@ export class BybitOrderService {
           status: 'NEW',
         },
       });
+      if (response.result?.orderId) placed.push(response.result.orderId);
     }
+    return placed;
   }
 
-  private async placeTpSl(client: RestClientV5, input: PlaceSignalOrdersInput): Promise<void> {
+  private async placeTpSl(client: RestClientV5, input: PlaceSignalOrdersInput): Promise<string[]> {
     const closeSide = input.direction === 'BUY' ? 'Sell' : 'Buy';
     const avgEntry = input.entries.reduce((acc, p) => acc + p, 0) / input.entries.length;
     const qty = computeQtyFromUsd(input.orderUsd, avgEntry, input.leverage);
     const tps = [...input.takeProfits].sort((a, b) => (input.direction === 'BUY' ? a - b : b - a));
     const splitQty = splitQtyChunks(qty, Math.max(1, tps.length));
+    const placed: string[] = [];
     for (let i = 0; i < tps.length; i += 1) {
       const tp = tps[i];
       if (tp == null || !Number.isFinite(tp) || tp <= 0) continue;
@@ -158,6 +166,7 @@ export class BybitOrderService {
           status: 'NEW',
         },
       });
+      if (response.result?.orderId) placed.push(response.result.orderId);
     }
     // Also set protective stop on exchange.
     try {
@@ -186,6 +195,33 @@ export class BybitOrderService {
         throw error;
       }
     }
+    return placed;
+  }
+
+  private async rollbackOrders(
+    client: RestClientV5,
+    signalId: string,
+    symbol: string,
+    bybitOrderIds: string[],
+  ): Promise<void> {
+    for (const orderId of bybitOrderIds) {
+      try {
+        await client.cancelOrder({
+          category: 'linear',
+          symbol,
+          orderId,
+        });
+      } catch {
+        // Best effort rollback.
+      }
+    }
+    await this.prisma.order.updateMany({
+      where: {
+        signalId,
+        bybitOrderId: { in: bybitOrderIds },
+      },
+      data: { status: 'CANCELLED' },
+    });
   }
 }
 

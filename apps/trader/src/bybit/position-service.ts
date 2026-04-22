@@ -4,6 +4,7 @@
  */
 
 import type { PrismaClient } from '@repo/shared-prisma';
+import type { RestClientV5 } from 'bybit-api';
 import type { AppLogger } from '../logger.js';
 import type { BybitClientRegistry } from './client-registry.js';
 
@@ -37,7 +38,7 @@ export class BybitPositionService {
     }
   }
 
-  private async reconcileSignals(cabinetId: string, client: BybitClientRegistry['getClient'] extends (...args: any[]) => Promise<infer T> ? T : never): Promise<void> {
+  private async reconcileSignals(cabinetId: string, client: RestClientV5): Promise<void> {
     const activeSignals = await this.prisma.signal.findMany({
       where: {
         cabinetId,
@@ -78,14 +79,20 @@ export class BybitPositionService {
         });
         continue;
       }
-      const closedPnl = await this.fetchClosedPnl(client, signal.pair);
+      const closedPnl = await this.fetchClosedPnlForSignal(signal.id, client, signal.pair);
       const finalStatus =
-        closedPnl == null ? 'FAILED' : closedPnl > 0 ? 'CLOSED_WIN' : closedPnl < 0 ? 'CLOSED_LOSS' : 'CLOSED_MIXED';
+        closedPnl == null
+          ? 'CLOSED_MIXED'
+          : closedPnl > 0
+            ? 'CLOSED_WIN'
+            : closedPnl < 0
+              ? 'CLOSED_LOSS'
+              : 'CLOSED_MIXED';
       await this.prisma.signal.update({
         where: { id: signal.id },
         data: {
           status: finalStatus,
-          realizedPnl: closedPnl,
+          ...(closedPnl == null ? {} : { realizedPnl: closedPnl }),
           closedAt: new Date(),
         },
       });
@@ -120,8 +127,24 @@ export class BybitPositionService {
     }
   }
 
-  private async fetchClosedPnl(client: any, symbol: string): Promise<number | null> {
+  private async fetchClosedPnlForSignal(
+    signalId: string,
+    client: RestClientV5,
+    symbol: string,
+  ): Promise<number | null> {
     try {
+      const orderIds = (
+        await this.prisma.order.findMany({
+          where: {
+            signalId,
+            bybitOrderId: { not: null },
+          },
+          select: { bybitOrderId: true },
+        })
+      )
+        .map((o) => o.bybitOrderId)
+        .filter((id): id is string => Boolean(id));
+      if (orderIds.length === 0) return null;
       const now = Date.now();
       const res = await client.getClosedPnL({
         category: 'linear',
@@ -132,7 +155,11 @@ export class BybitPositionService {
       });
       const rows = res.result?.list ?? [];
       if (!rows.length) return null;
-      return rows.reduce((acc: number, row: { closedPnl?: string | number | null }) => {
+      const filtered = rows.filter((row: { orderId?: string | null }) =>
+        row.orderId ? orderIds.includes(row.orderId) : false,
+      );
+      if (!filtered.length) return null;
+      return filtered.reduce((acc: number, row: { closedPnl?: string | number | null }) => {
         const pnl = Number(row.closedPnl ?? 0);
         return Number.isFinite(pnl) ? acc + pnl : acc;
       }, 0);

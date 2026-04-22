@@ -19,6 +19,7 @@ interface IngestRow {
   messageId: string;
   text: string | null;
   replyToText: string | null;
+  replyToMessageId: string | null;
   rawJson: string | null;
 }
 
@@ -70,7 +71,7 @@ export class IngestWorker {
         LIMIT ${batchSize}
       )
       RETURNING id, "userId", "chatId", "messageId", "text", "replyToText"
-               , "rawJson"
+               , "replyToMessageId", "rawJson"
     `;
 
     for (const row of claimed) {
@@ -181,13 +182,21 @@ export class IngestWorker {
   ): Promise<void> {
     const { prisma, logger } = this.opts;
     const latestSignal = await prisma.signal.findFirst({
-      where: {
-        userId: row.userId,
-        sourceChatId: row.chatId,
-        deletedAt: null,
-      },
+      where: row.replyToMessageId
+        ? {
+            userId: row.userId,
+            sourceChatId: row.chatId,
+            sourceMessageId: row.replyToMessageId,
+            deletedAt: null,
+          }
+        : {
+            userId: row.userId,
+            sourceChatId: row.chatId,
+            deletedAt: null,
+            status: { in: ['OPEN', 'ORDERS_PLACED'] },
+          },
       orderBy: { createdAt: 'desc' },
-      select: { id: true, cabinetId: true, status: true },
+      select: { id: true, cabinetId: true, status: true, sourceMessageId: true },
     });
     await prisma.ingestEvent.update({
       where: { id: row.id },
@@ -210,6 +219,7 @@ export class IngestWorker {
           ingestId: row.id,
           text: row.text,
           replyToText: row.replyToText,
+          replyToMessageId: row.replyToMessageId,
         }),
       },
     });
