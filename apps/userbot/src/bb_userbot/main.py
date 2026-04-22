@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import signal
+from typing import Any
 
 import asyncpg.exceptions
 import structlog
@@ -19,9 +20,9 @@ from .session_manager import SessionManager
 
 async def _start_sessions_when_schema_ready(
     sessions: SessionManager,
-    log: structlog.stdlib.BoundLogger,
+    log: Any,
 ) -> None:
-    """Ждём, пока в БД появятся таблицы Prisma (миграции с другого деплоя, напр. api pre-deploy)."""
+    """Wait until Prisma tables exist (e.g. after api pre-deploy runs migrate)."""
     max_attempts = max(1, int(os.environ.get("USERBOT_SCHEMA_WAIT_ATTEMPTS", "40")))
     delay_sec = max(0.5, float(os.environ.get("USERBOT_SCHEMA_WAIT_SEC", "3")))
     for attempt in range(1, max_attempts + 1):
