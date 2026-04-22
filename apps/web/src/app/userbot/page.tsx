@@ -23,18 +23,59 @@ interface Channel {
   sourcePriority: number;
 }
 
+interface DashboardSummary {
+  channelsTotal: number;
+  channelsEnabled: number;
+  cabinetsTotal: number;
+  cabinetsEnabled: number;
+  ingestToday: number;
+  classifiedToday: number;
+  signalsReadyToday: number;
+  signalsFannedOutToday: number;
+}
+
+interface CabinetUsage {
+  cabinetId: string;
+  cabinetSlug: string;
+  cabinetDisplayName: string;
+  cabinetEnabled: boolean;
+  activeFilters: number;
+  totalFilters: number;
+}
+
+interface RecentEvent {
+  id: string;
+  chatId: string;
+  chatTitle: string | null;
+  messageId: string;
+  text: string | null;
+  status: string;
+  classification: string | null;
+  createdAt: string;
+  draftStatus: string | null;
+}
+
+interface CurrentUser {
+  id: string;
+  activeCabinetId: string | null;
+}
+
 export default async function UserbotPage() {
+  let me: CurrentUser;
   try {
-    await apiFetch('/auth/me');
+    me = await apiFetch<CurrentUser>('/auth/me');
   } catch (e) {
     const err = e as ApiError;
     if (err.status === 401) redirect('/login');
     throw e;
   }
 
-  const [session, channels] = await Promise.all([
+  const [session, channels, summary, cabinetUsage, recentEvents] = await Promise.all([
     apiFetch<Session>('/userbot/session'),
     apiFetch<Channel[]>('/userbot/channels'),
+    apiFetch<DashboardSummary>('/userbot/dashboard/summary'),
+    apiFetch<CabinetUsage[]>('/userbot/dashboard/cabinets'),
+    apiFetch<RecentEvent[]>('/userbot/events/recent?limit=40'),
   ]);
 
   return (
@@ -46,7 +87,14 @@ export default async function UserbotPage() {
           Этот userbot общий для аккаунта: читает подключённые источники и передаёт сигналы в pipeline.
           Отдельный cabinet bot настраивается внутри каждого кабинета.
         </p>
-        <UserbotPanel initialSession={session} initialChannels={channels} />
+        <UserbotPanel
+          initialSession={session}
+          initialChannels={channels}
+          initialSummary={summary}
+          initialCabinetUsage={cabinetUsage}
+          initialRecentEvents={recentEvents}
+          activeCabinetId={me.activeCabinetId}
+        />
       </div>
     </>
   );

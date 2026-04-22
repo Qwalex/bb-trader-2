@@ -10,7 +10,10 @@ import type { PrismaClient } from '@repo/shared-prisma';
 import type {
   AddChannelDto,
   UpdateChannelDto,
+  UserbotCabinetUsageDto,
   UserbotChannelDto,
+  UserbotDashboardSummaryDto,
+  UserbotRecentEventDto,
   UserbotSessionDto,
 } from '@repo/shared-ts';
 import { encryptSecret } from '@repo/shared-ts';
@@ -103,6 +106,108 @@ export class UserbotService {
       username: c.username,
       enabled: c.enabled,
       sourcePriority: c.sourcePriority,
+    }));
+  }
+
+  async getDashboardSummary(userId: string): Promise<UserbotDashboardSummaryDto> {
+    const dayStart = new Date();
+    dayStart.setHours(0, 0, 0, 0);
+
+    const [channelsTotal, channelsEnabled, cabinetsTotal, cabinetsEnabled, ingestToday, classifiedToday] =
+      await this.prisma.$transaction([
+        this.prisma.userbotChannel.count({ where: { userId } }),
+        this.prisma.userbotChannel.count({ where: { userId, enabled: true } }),
+        this.prisma.cabinet.count({ where: { ownerUserId: userId } }),
+        this.prisma.cabinet.count({ where: { ownerUserId: userId, enabled: true } }),
+        this.prisma.ingestEvent.count({
+          where: { userId, sourceType: 'userbot', createdAt: { gte: dayStart } },
+        }),
+        this.prisma.ingestEvent.count({
+          where: { userId, sourceType: 'userbot', classification: { not: null }, createdAt: { gte: dayStart } },
+        }),
+      ]);
+
+    const [signalsReadyToday, signalsFannedOutToday] = await this.prisma.$transaction([
+      this.prisma.signalDraft.count({
+        where: { userId, sourceType: 'userbot', status: 'ready', createdAt: { gte: dayStart } },
+      }),
+      this.prisma.signalDraft.count({
+        where: { userId, sourceType: 'userbot', status: 'fanned_out', createdAt: { gte: dayStart } },
+      }),
+    ]);
+
+    return {
+      channelsTotal,
+      channelsEnabled,
+      cabinetsTotal,
+      cabinetsEnabled,
+      ingestToday,
+      classifiedToday,
+      signalsReadyToday,
+      signalsFannedOutToday,
+    };
+  }
+
+  async listCabinetUsage(userId: string): Promise<UserbotCabinetUsageDto[]> {
+    const cabinets = await this.prisma.cabinet.findMany({
+      where: { ownerUserId: userId },
+      include: {
+        channelFilters: {
+          select: { enabled: true },
+        },
+      },
+      orderBy: [{ enabled: 'desc' }, { createdAt: 'asc' }],
+    });
+    return cabinets.map((cabinet) => ({
+      cabinetId: cabinet.id,
+      cabinetSlug: cabinet.slug,
+      cabinetDisplayName: cabinet.displayName,
+      cabinetEnabled: cabinet.enabled,
+      activeFilters: cabinet.channelFilters.filter((row) => row.enabled).length,
+      totalFilters: cabinet.channelFilters.length,
+    }));
+  }
+
+  async listRecentEvents(userId: string, limit: number): Promise<UserbotRecentEventDto[]> {
+    const events = await this.prisma.ingestEvent.findMany({
+      where: { userId, sourceType: 'userbot' },
+      select: {
+        id: true,
+        chatId: true,
+        messageId: true,
+        text: true,
+        status: true,
+        classification: true,
+        createdAt: true,
+        signalDrafts: {
+          select: { status: true },
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+
+    const uniqueChatIds = Array.from(new Set(events.map((row) => row.chatId)));
+    const channels = uniqueChatIds.length
+      ? await this.prisma.userbotChannel.findMany({
+          where: { userId, chatId: { in: uniqueChatIds } },
+          select: { chatId: true, title: true },
+        })
+      : [];
+    const titleByChatId = new Map(channels.map((channel) => [channel.chatId, channel.title]));
+
+    return events.map((event) => ({
+      id: event.id,
+      chatId: event.chatId,
+      chatTitle: titleByChatId.get(event.chatId) ?? null,
+      messageId: event.messageId,
+      text: event.text,
+      status: event.status,
+      classification: event.classification,
+      createdAt: event.createdAt.toISOString(),
+      draftStatus: event.signalDrafts[0]?.status ?? null,
     }));
   }
 

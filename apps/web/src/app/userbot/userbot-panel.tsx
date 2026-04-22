@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import Link from 'next/link';
+import { useEffect, useMemo, useState } from 'react';
 
 interface Session {
   userId: string;
@@ -18,6 +19,38 @@ interface Channel {
   username: string | null;
   enabled: boolean;
   sourcePriority: number;
+}
+
+interface DashboardSummary {
+  channelsTotal: number;
+  channelsEnabled: number;
+  cabinetsTotal: number;
+  cabinetsEnabled: number;
+  ingestToday: number;
+  classifiedToday: number;
+  signalsReadyToday: number;
+  signalsFannedOutToday: number;
+}
+
+interface CabinetUsage {
+  cabinetId: string;
+  cabinetSlug: string;
+  cabinetDisplayName: string;
+  cabinetEnabled: boolean;
+  activeFilters: number;
+  totalFilters: number;
+}
+
+interface RecentEvent {
+  id: string;
+  chatId: string;
+  chatTitle: string | null;
+  messageId: string;
+  text: string | null;
+  status: string;
+  classification: string | null;
+  createdAt: string;
+  draftStatus: string | null;
 }
 
 interface CommandResult {
@@ -42,19 +75,56 @@ interface SyncDialogsResultPayload {
   imported?: number;
 }
 
+function formatSourceName(row: Channel): string {
+  return row.username ? `${row.title} (@${row.username})` : row.title;
+}
+
+function cutText(value: string | null, limit = 180): string {
+  if (!value) return '—';
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (normalized.length <= limit) return normalized;
+  return `${normalized.slice(0, limit)}...`;
+}
+
 export function UserbotPanel({
   initialSession,
   initialChannels,
+  initialSummary,
+  initialCabinetUsage,
+  initialRecentEvents,
+  activeCabinetId,
 }: {
   initialSession: Session;
   initialChannels: Channel[];
+  initialSummary: DashboardSummary;
+  initialCabinetUsage: CabinetUsage[];
+  initialRecentEvents: RecentEvent[];
+  activeCabinetId: string | null;
 }) {
   const [session, setSession] = useState(initialSession);
   const [channels, setChannels] = useState(initialChannels);
+  const [summary, setSummary] = useState(initialSummary);
+  const [cabinetUsage, setCabinetUsage] = useState(initialCabinetUsage);
+  const [recentEvents, setRecentEvents] = useState(initialRecentEvents);
+  const [search, setSearch] = useState('');
   const [qr, setQr] = useState<{ commandId: string; url: string | null; expiresAt: string | null } | null>(null);
   const [newChannel, setNewChannel] = useState({ chatId: '', title: '', username: '' });
   const [twoFaPassword, setTwoFaPassword] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
+
+  const filteredChannels = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return channels;
+    return channels.filter((row) => {
+      return (
+        row.title.toLowerCase().includes(q) ||
+        row.chatId.toLowerCase().includes(q) ||
+        (row.username ?? '').toLowerCase().includes(q)
+      );
+    });
+  }, [channels, search]);
+
   function extractQr(resultJson: string | null): { url: string | null; expiresAt: string | null } | null {
     if (!resultJson) return null;
     try {
@@ -73,14 +143,19 @@ export function UserbotPanel({
     }
   }
 
-
-  async function refetch() {
-    const [s, c] = await Promise.all([
+  async function refetchAll() {
+    const [s, c, ds, dc, re] = await Promise.all([
       fetch('/api/proxy/userbot/session', { cache: 'no-store' }).then((r) => r.json()),
       fetch('/api/proxy/userbot/channels', { cache: 'no-store' }).then((r) => r.json()),
+      fetch('/api/proxy/userbot/dashboard/summary', { cache: 'no-store' }).then((r) => r.json()),
+      fetch('/api/proxy/userbot/dashboard/cabinets', { cache: 'no-store' }).then((r) => r.json()),
+      fetch('/api/proxy/userbot/events/recent?limit=40', { cache: 'no-store' }).then((r) => r.json()),
     ]);
-    setSession(s);
-    setChannels(c);
+    setSession(s as Session);
+    setChannels(c as Channel[]);
+    setSummary(ds as DashboardSummary);
+    setCabinetUsage(dc as CabinetUsage[]);
+    setRecentEvents(re as RecentEvent[]);
   }
 
   async function enqueue(type: string, payload?: Record<string, unknown>) {
@@ -112,10 +187,7 @@ export function UserbotPanel({
     return null;
   }
 
-  async function waitForSessionTransition(
-    timeoutMs = 120_000,
-    pollMs = 2_000,
-  ): Promise<Session | null> {
+  async function waitForSessionTransition(timeoutMs = 120_000, pollMs = 2_000): Promise<Session | null> {
     const started = Date.now();
     while (Date.now() - started < timeoutMs) {
       await new Promise((r) => setTimeout(r, pollMs));
@@ -123,11 +195,7 @@ export function UserbotPanel({
       if (!res.ok) continue;
       const next = (await res.json()) as Session;
       setSession(next);
-      if (
-        next.status === 'connected' ||
-        next.status === 'failed' ||
-        next.status === 'awaiting_2fa'
-      ) {
+      if (next.status === 'connected' || next.status === 'failed' || next.status === 'awaiting_2fa') {
         return next;
       }
     }
@@ -156,14 +224,12 @@ export function UserbotPanel({
       } else if (finalSession?.status === 'failed') {
         setMsg(`Ошибка входа: статус ${finalSession.status}`);
       } else {
-        setMsg(
-          'QR отсканирован, но подтверждение входа не получено вовремя. Проверьте логи userbot (возможен 2FA или истёк QR).',
-        );
+        setMsg('QR отсканирован, но подтверждение входа не получено вовремя. Проверьте userbot-логи.');
       }
     } else if (result?.status === 'done') {
       setMsg('Команда login_qr выполнена, ожидаем подтверждение входа в Telegram.');
     }
-    await refetch();
+    await refetchAll();
   }
 
   async function onSubmitTwoFa(e: React.FormEvent) {
@@ -181,7 +247,7 @@ export function UserbotPanel({
     const result = await pollCommand(cmd.commandId);
     if (result?.status === 'failed') {
       setMsg(`Ошибка 2FA: ${result.error || 'не удалось подтвердить пароль'}`);
-      await refetch();
+      await refetchAll();
       return;
     }
     const finalSession = await waitForSessionTransition(60_000, 1_500);
@@ -193,14 +259,16 @@ export function UserbotPanel({
     } else if (finalSession?.status === 'failed') {
       setMsg(finalSession.lastError || 'Не удалось завершить вход по 2FA.');
     }
-    await refetch();
+    await refetchAll();
   }
 
   async function onLogout() {
     if (!confirm('Разлогинить Telegram-сессию?')) return;
     await enqueue('logout');
     setMsg('Команда на выход отправлена.');
-    setTimeout(refetch, 1500);
+    setTimeout(() => {
+      void refetchAll();
+    }, 1500);
   }
 
   async function onSyncDialogs() {
@@ -218,9 +286,9 @@ export function UserbotPanel({
       const data = (result?.resultJson ? JSON.parse(result.resultJson) : {}) as SyncDialogsResultPayload;
       if (typeof data.imported === 'number') importedText = ` Импортировано: ${data.imported}.`;
     } catch {
-      /* ignore malformed result payload */
+      /* ignore malformed payload */
     }
-    await refetch();
+    await refetchAll();
     setMsg(`Синхронизация завершена.${importedText}`);
   }
 
@@ -231,36 +299,69 @@ export function UserbotPanel({
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        chatId: newChannel.chatId,
-        title: newChannel.title,
-        username: newChannel.username || undefined,
+        chatId: newChannel.chatId.trim(),
+        title: newChannel.title.trim(),
+        username: newChannel.username.trim() || undefined,
       }),
     });
     if (res.ok) {
       setNewChannel({ chatId: '', title: '', username: '' });
-      await refetch();
-    } else {
-      setMsg(`Ошибка: ${await res.text()}`);
+      await refetchAll();
+      return;
+    }
+    setMsg(`Ошибка: ${await res.text()}`);
+  }
+
+  async function updateChannel(channel: Channel, data: { enabled?: boolean; sourcePriority?: number }, busy: string) {
+    setBusyKey(busy);
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/proxy/userbot/channels/${channel.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          enabled: data.enabled ?? channel.enabled,
+          sourcePriority: data.sourcePriority ?? channel.sourcePriority,
+        }),
+      });
+      if (!res.ok) {
+        setMsg(`Ошибка: ${await res.text()}`);
+        return;
+      }
+      await refetchAll();
+    } finally {
+      setBusyKey(null);
     }
   }
 
-  async function onToggleChannel(c: Channel) {
-    await fetch(`/api/proxy/userbot/channels/${c.id}`, {
-      method: 'PATCH',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ enabled: !c.enabled, sourcePriority: c.sourcePriority }),
-    });
-    await refetch();
+  async function onToggleChannel(channel: Channel) {
+    await updateChannel(channel, { enabled: !channel.enabled }, `toggle:${channel.id}`);
   }
 
-  async function onRemoveChannel(c: Channel) {
-    if (!confirm(`Удалить канал ${c.title}?`)) return;
-    await fetch(`/api/proxy/userbot/channels/${c.id}`, { method: 'DELETE' });
-    await refetch();
+  async function onPriorityBlur(channel: Channel, rawValue: string) {
+    const parsed = Number.parseInt(rawValue.trim(), 10);
+    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100) {
+      setMsg('Priority должен быть целым числом от 0 до 100.');
+      return;
+    }
+    if (parsed === channel.sourcePriority) return;
+    await updateChannel(channel, { sourcePriority: parsed }, `priority:${channel.id}`);
+  }
+
+  async function onRemoveChannel(channel: Channel) {
+    if (!confirm(`Удалить канал ${channel.title}?`)) return;
+    const res = await fetch(`/api/proxy/userbot/channels/${channel.id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      setMsg(`Ошибка: ${await res.text()}`);
+      return;
+    }
+    await refetchAll();
   }
 
   useEffect(() => {
-    const id = setInterval(refetch, 15000);
+    const id = setInterval(() => {
+      void refetchAll();
+    }, 15_000);
     return () => clearInterval(id);
   }, []);
 
@@ -278,6 +379,33 @@ export function UserbotPanel({
         </div>
       )}
 
+      <div className="grid">
+        <div className="card">
+          <h2>Источники</h2>
+          <div style={{ fontSize: 24, fontWeight: 700 }}>{summary.channelsEnabled}</div>
+          <p style={{ color: 'var(--fg-dim)', margin: '8px 0 0' }}>включено из {summary.channelsTotal}</p>
+        </div>
+        <div className="card">
+          <h2>Кабинеты</h2>
+          <div style={{ fontSize: 24, fontWeight: 700 }}>{summary.cabinetsEnabled}</div>
+          <p style={{ color: 'var(--fg-dim)', margin: '8px 0 0' }}>активных из {summary.cabinetsTotal}</p>
+        </div>
+        <div className="card">
+          <h2>Ingest Today</h2>
+          <div style={{ fontSize: 24, fontWeight: 700 }}>{summary.ingestToday}</div>
+          <p style={{ color: 'var(--fg-dim)', margin: '8px 0 0' }}>
+            classified: {summary.classifiedToday}
+          </p>
+        </div>
+        <div className="card">
+          <h2>Signal Drafts</h2>
+          <div style={{ fontSize: 24, fontWeight: 700 }}>{summary.signalsReadyToday}</div>
+          <p style={{ color: 'var(--fg-dim)', margin: '8px 0 0' }}>
+            fanned out: {summary.signalsFannedOutToday}
+          </p>
+        </div>
+      </div>
+
       <div className="card">
         <h2>Сессия</h2>
         <p>
@@ -288,9 +416,7 @@ export function UserbotPanel({
           {session.phone && <> · телефон: {session.phone}</>}
           {session.lastSeenAt && <> · last seen: {new Date(session.lastSeenAt).toLocaleString()}</>}
         </p>
-        {session.lastError && (
-          <p style={{ color: 'var(--danger)' }}>{session.lastError}</p>
-        )}
+        {session.lastError && <p style={{ color: 'var(--danger)' }}>{session.lastError}</p>}
 
         <div className="row">
           {!session.hasSession && <button onClick={onStartQrLogin}>Залогиниться (QR)</button>}
@@ -341,8 +467,20 @@ export function UserbotPanel({
       </div>
 
       <div className="card">
-        <h2>Каналы</h2>
-        <form onSubmit={onAddChannel} className="row">
+        <h2>Источники (legacy-style)</h2>
+        <div className="row" style={{ justifyContent: 'space-between', marginBottom: 10 }}>
+          <input
+            style={{ minWidth: 280 }}
+            placeholder="Поиск по названию, chat id или @username"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+          <span style={{ color: 'var(--fg-dim)' }}>
+            Найдено: {filteredChannels.length} из {channels.length}
+          </span>
+        </div>
+
+        <form onSubmit={onAddChannel} className="row" style={{ marginBottom: 12 }}>
           <input
             placeholder="chatId (напр. -1001234567890)"
             value={newChannel.chatId}
@@ -363,36 +501,47 @@ export function UserbotPanel({
           <button type="submit">+ Добавить</button>
         </form>
 
-        {channels.length === 0 ? (
-          <p style={{ color: 'var(--fg-dim)' }}>Каналов нет.</p>
+        {filteredChannels.length === 0 ? (
+          <p style={{ color: 'var(--fg-dim)' }}>Источников по текущему фильтру нет.</p>
         ) : (
           <table>
             <thead>
               <tr>
-                <th>Название</th>
+                <th>Источник</th>
                 <th>Chat ID</th>
-                <th>@</th>
                 <th>Включён</th>
                 <th>Priority</th>
                 <th />
               </tr>
             </thead>
             <tbody>
-              {channels.map((c) => (
-                <tr key={c.id}>
-                  <td>{c.title}</td>
+              {filteredChannels.map((channel) => (
+                <tr key={channel.id}>
+                  <td>{formatSourceName(channel)}</td>
                   <td>
-                    <code>{c.chatId}</code>
+                    <code>{channel.chatId}</code>
                   </td>
-                  <td>{c.username ?? '—'}</td>
                   <td>
-                    <button className="ghost" onClick={() => onToggleChannel(c)}>
-                      {c.enabled ? 'on' : 'off'}
+                    <button
+                      className="ghost"
+                      disabled={busyKey === `toggle:${channel.id}`}
+                      onClick={() => void onToggleChannel(channel)}
+                    >
+                      {channel.enabled ? 'on' : 'off'}
                     </button>
                   </td>
-                  <td>{c.sourcePriority}</td>
                   <td>
-                    <button className="danger" onClick={() => onRemoveChannel(c)}>
+                    <input
+                      style={{ width: 90 }}
+                      type="number"
+                      min={0}
+                      max={100}
+                      defaultValue={channel.sourcePriority}
+                      onBlur={(e) => void onPriorityBlur(channel, e.target.value)}
+                    />
+                  </td>
+                  <td>
+                    <button className="danger" onClick={() => void onRemoveChannel(channel)}>
                       ×
                     </button>
                   </td>
@@ -400,6 +549,82 @@ export function UserbotPanel({
               ))}
             </tbody>
           </table>
+        )}
+      </div>
+
+      <div className="card">
+        <h2>Cabinet coverage</h2>
+        <p style={{ color: 'var(--fg-dim)' }}>
+          Trading-настройки по источникам живут на уровне кабинета. Здесь показано, где именно эти источники активированы.
+        </p>
+        {cabinetUsage.length === 0 ? (
+          <p style={{ color: 'var(--fg-dim)' }}>Кабинетов пока нет.</p>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>Кабинет</th>
+                <th>Статус</th>
+                <th>Фильтры</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {cabinetUsage.map((cabinet) => (
+                <tr key={cabinet.cabinetId}>
+                  <td>
+                    {cabinet.cabinetDisplayName}{' '}
+                    <span style={{ color: 'var(--fg-dim)' }}>({cabinet.cabinetSlug})</span>
+                    {activeCabinetId === cabinet.cabinetId && (
+                      <span className="badge ok" style={{ marginLeft: 8 }}>
+                        active
+                      </span>
+                    )}
+                  </td>
+                  <td>
+                    <span className={`badge ${cabinet.cabinetEnabled ? 'ok' : 'err'}`}>
+                      {cabinet.cabinetEnabled ? 'enabled' : 'disabled'}
+                    </span>
+                  </td>
+                  <td>
+                    {cabinet.activeFilters} / {cabinet.totalFilters}
+                  </td>
+                  <td>
+                    <Link href={`/cabinets/${cabinet.cabinetId}`}>Открыть кабинет</Link>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div className="card">
+        <h2>Recent ingest activity</h2>
+        {recentEvents.length === 0 ? (
+          <p style={{ color: 'var(--fg-dim)' }}>Событий пока нет.</p>
+        ) : (
+          <div style={{ display: 'grid', gap: 10 }}>
+            {recentEvents.map((event) => (
+              <div key={event.id} className="card" style={{ marginBottom: 0 }}>
+                <div className="row" style={{ justifyContent: 'space-between' }}>
+                  <div>
+                    <strong>{event.chatTitle ?? event.chatId}</strong>{' '}
+                    <span style={{ color: 'var(--fg-dim)' }}>
+                      ({event.chatId} / {event.messageId})
+                    </span>
+                  </div>
+                  <div style={{ color: 'var(--fg-dim)' }}>{new Date(event.createdAt).toLocaleString()}</div>
+                </div>
+                <p style={{ margin: '8px 0' }}>{cutText(event.text)}</p>
+                <div className="row">
+                  <span className="badge">ingest: {event.status}</span>
+                  <span className="badge">{event.classification ?? 'classification:none'}</span>
+                  <span className="badge">{event.draftStatus ?? 'draft:none'}</span>
+                </div>
+              </div>
+            ))}
+          </div>
         )}
       </div>
     </>

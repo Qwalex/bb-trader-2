@@ -8,12 +8,14 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
 import { z } from 'zod';
 import {
   AddChannelDto,
+  UserbotRecentEventsQueryDto,
   UpdateChannelDto,
   USERBOT_COMMAND_TYPES,
 } from '@repo/shared-ts';
@@ -62,6 +64,23 @@ export class UserbotController {
   @Get('channels')
   listChannels(@Req() req: RequestWithUser) {
     return this.userbot.listChannels(req.authUserId!);
+  }
+
+  @Get('dashboard/summary')
+  getDashboardSummary(@Req() req: RequestWithUser) {
+    return this.userbot.getDashboardSummary(req.authUserId!);
+  }
+
+  @Get('dashboard/cabinets')
+  listCabinetUsage(@Req() req: RequestWithUser) {
+    return this.userbot.listCabinetUsage(req.authUserId!);
+  }
+
+  @Get('events/recent')
+  listRecentEvents(@Req() req: RequestWithUser, @Query() query: unknown) {
+    const parsed = UserbotRecentEventsQueryDto.safeParse(query);
+    if (!parsed.success) throw new BadRequestException(parsed.error.issues);
+    return this.userbot.listRecentEvents(req.authUserId!, parsed.data.limit);
   }
 
   @Post('channels')
