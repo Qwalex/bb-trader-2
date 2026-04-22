@@ -176,6 +176,9 @@ importers:
       '@prisma/client':
         specifier: ^6.1.0
         version: 6.19.3(prisma@6.19.3(typescript@5.9.3))(typescript@5.9.3)
+      prisma:
+        specifier: ^6.1.0
+        version: 6.19.3(typescript@5.9.3)
     devDependencies:
       '@types/node':
         specifier: ^22.10.5
@@ -183,9 +186,6 @@ importers:
       dotenv-cli:
         specifier: ^8.0.0
         version: 8.0.0
-      prisma:
-        specifier: ^6.1.0
-        version: 6.19.3(typescript@5.9.3)
       typescript:
         specifier: ^5.7.3
         version: 5.9.3

@@ -191,7 +191,9 @@ Login-виджет работает только с доменом, заране
 
 ## Часть 6. Применить миграции БД
 
-Первый раз — вручную против Railway-Postgres, не автоматически на Railway (чтобы не ловить race между стартующими сервисами):
+**На Railway:** при каждом деплое сервиса **`api`** перед стартом контейнера выполняется `preDeployCommand` из `apps/api/railway.json` — `pnpm run db:migrate:deploy` (Prisma CLI теперь в prod-зависимостях `@repo/shared-prisma`). Пока **хотя бы один** успешный деплой `api` не прошёл, таблиц в БД может не быть — тогда `userbot` упадёт с `relation "UserbotSession" does not exist`. Порядок: сначала дождись зелёного деплоя `api`, потом остальные сервисы (или вручную один раз выполни команды ниже).
+
+**Вручную** (локально, экстренно на проде, или если отключишь pre-deploy в UI):
 
 ```bash
 # Railway Postgres → Variables → скопировать DATABASE_URL (с реальным паролем).
@@ -347,7 +349,7 @@ curl -i https://<api-domain>.up.railway.app/auth/me
 
 **CORS ошибка в браузере** → `API_CORS_ORIGINS` у api не содержит домен `web`. Переменная — comma-separated список, `https://` обязателен.
 
-**`userbot` в логах `UndefinedTableError: relation "UserbotSession" does not exist`** → в Postgres, к которому подключается `DATABASE_URL`, **не применены миграции Prisma**. Таблица появляется только после `prisma migrate deploy` (см. [часть 6](#часть-6-применить-миграции-бд)). Убедись, что у `userbot` тот же `DATABASE_URL`, что у остальных сервисов (референс `${{Postgres.DATABASE_URL}}`), а не пустая/другая БД.
+**`userbot` в логах `UndefinedTableError: relation "UserbotSession" does not exist`** → в Postgres по `DATABASE_URL` **ещё нет схемы** (миграции не применены). Обычно помогает **успешный деплой `api`** (там `preDeployCommand` → `migrate deploy`). Если `api` ещё не деплоился или pre-deploy отключён в UI — выполни вручную шаги из [часть 6](#часть-6-применить-миграции-бд). Убедись, что у `userbot` тот же `DATABASE_URL`, что у остальных (референс `${{Postgres.DATABASE_URL}}`).
 
 **`userbot` крутит QR-логин в бесконечности** → не пришли `TELEGRAM_USERBOT_API_ID/HASH` или пришли с бот-API (это разные сущности!). Проверить на my.telegram.org.
 
@@ -389,7 +391,7 @@ curl -i https://<api-domain>.up.railway.app/auth/me
 
 ## Что дальше
 
-- Автоматизация миграций: вместо ручного `migrate deploy` можно добавить **Release Command** в сервис `api` (Settings → Deploy → Pre-Deploy Command): `pnpm --filter @repo/shared-prisma exec prisma migrate deploy`. Тогда миграции применятся перед стартом api, а остальные сервисы потом.
+- Миграции на проде: в `apps/api/railway.json` задан **`preDeployCommand`** с `pnpm run db:migrate:deploy` (скрипт в `apps/api/package.json`). Дублирующую команду в UI задавать не нужно, если config-as-code активен.
 - Preview-окружения: Railway умеет деплоить каждый PR в отдельный env — под это понадобятся отдельные `APP_ENCRYPTION_KEY` и отдельная БД (копия через `pg_dump`).
 - Observability: Railway ограниченно показывает логи; если нужно больше — подключи Logtail / Better Stack (обе поддерживают syslog-форвард из Railway out-of-the-box).
 

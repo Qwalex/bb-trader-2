@@ -23,12 +23,12 @@
     "clean": "rm -rf dist node_modules/.prisma"
   },
   "dependencies": {
-    "@prisma/client": "^6.1.0"
+    "@prisma/client": "^6.1.0",
+    "prisma": "^6.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
     "dotenv-cli": "^8.0.0",
-    "prisma": "^6.1.0",
     "typescript": "^5.7.3"
   }
 }

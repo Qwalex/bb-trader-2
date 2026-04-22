@@ -14,9 +14,9 @@ interface Props {
 }
 
 /**
- * Telegram Login Widget — вставляет официальный `<script src="telegram-widget.js">`
- * и ожидает колбэк на window.onTelegramAuth. Отправляем payload в `/api/auth/telegram`
- * (route-handler), который проксирует его в API (HMAC-проверка там).
+ * Telegram Login Widget — подгружает скрипт через `/api/telegram-widget` (серверный
+ * fetch с telegram.org), чтобы клиент в сетях с блокировкой telegram.org получал JS
+ * с вашего домена. Колбэк: window.onTelegramAuth → POST `/api/auth/telegram` → API.
  */
 export function TelegramLoginWidget({ botUsername, callbackUrl = '/' }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -43,7 +43,7 @@ export function TelegramLoginWidget({ botUsername, callbackUrl = '/' }: Props) {
     };
 
     const script = document.createElement('script');
-    script.src = 'https://telegram.org/js/telegram-widget.js?22';
+    script.src = '/api/telegram-widget';
     script.async = true;
     script.setAttribute('data-telegram-login', botUsername);
     script.setAttribute('data-size', 'large');

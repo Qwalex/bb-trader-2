@@ -34,7 +34,7 @@
 - Root Directory каждого сервиса на Railway = **`.`** (корень репо) — иначе Dockerfile не видит `packages/*` и `pnpm-lock.yaml`.
 - Общий Dockerfile для Node-сервисов: `docker/node-base.Dockerfile` с ARG `APP_NAME`/`APP_DIR`.
 - Python userbot: `docker/userbot.Dockerfile` (uv + Python 3.12).
-- Миграции Prisma — **руками** (`pnpm --filter @repo/shared-prisma exec prisma migrate deploy`) после merge в main, чтобы не ловить race между стартующими сервисами.
+- На Railway сервис **`api`** перед стартом выполняет `preDeployCommand` → `pnpm run db:migrate:deploy` (см. `apps/api/railway.json`), чтобы таблицы вроде `UserbotSession` существовали до `userbot`/воркеров. Локально и вне Railway по-прежнему: `pnpm db:migrate:deploy` или `pnpm --filter @repo/shared-prisma exec prisma migrate deploy`.
 - Пошаговый runbook: `docs/railway-deployment.md`.
 
 ## Сравнение с bb-trader (старая система)
