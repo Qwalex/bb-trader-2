@@ -349,7 +349,7 @@ curl -i https://<api-domain>.up.railway.app/auth/me
 
 **CORS ошибка в браузере** → `API_CORS_ORIGINS` у api не содержит домен `web`. Переменная — comma-separated список, `https://` обязателен.
 
-**`userbot` в логах `UndefinedTableError: relation "UserbotSession" does not exist`** → в Postgres по `DATABASE_URL` **ещё нет схемы** (миграции не применены). Обычно помогает **успешный деплой `api`** (там `preDeployCommand` → `migrate deploy`). Если `api` ещё не деплоился или pre-deploy отключён в UI — выполни вручную шаги из [часть 6](#часть-6-применить-миграции-бд). Убедись, что у `userbot` тот же `DATABASE_URL`, что у остальных (референс `${{Postgres.DATABASE_URL}}`).
+**`userbot` в логах `UndefinedTableError: relation "UserbotSession" does not exist`** → в Postgres по `DATABASE_URL` **ещё нет схемы** (миграции не применены). Обычно помогает **успешный деплой `api`** (там `preDeployCommand` → `migrate deploy`). Код userbot **несколько минут** ретраит старт при этой ошибке, чтобы пережить гонку «userbot поднялся раньше api». Если после ожидания всё ещё падает — вручную [часть 6](#часть-6-применить-миграции-бд) или проверь тот же `DATABASE_URL` (`${{Postgres.DATABASE_URL}}`). Таймауты: `USERBOT_SCHEMA_WAIT_ATTEMPTS` (default 40), `USERBOT_SCHEMA_WAIT_SEC` (default 3).
 
 **`userbot` крутит QR-логин в бесконечности** → не пришли `TELEGRAM_USERBOT_API_ID/HASH` или пришли с бот-API (это разные сущности!). Проверить на my.telegram.org.
 
