@@ -17,10 +17,12 @@ export class SessionGuard implements CanActivate {
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
     const req = context.switchToHttp().getRequest<RequestWithUser>();
-    const sessionId = (req as unknown as { cookies?: Record<string, string> }).cookies?.[
+    const rawCookie = (req as unknown as { cookies?: Record<string, string> }).cookies?.[
       SESSION_COOKIE_NAME
     ];
-    if (!sessionId) throw new UnauthorizedException('no session cookie');
+    if (!rawCookie) throw new UnauthorizedException('no session cookie');
+    const sessionId = this.extractSessionId(req, rawCookie);
+    if (!sessionId) throw new UnauthorizedException('invalid session cookie signature');
     const auth = await this.auth.findSession(sessionId);
     if (!auth) throw new UnauthorizedException('invalid session');
     req.authUserId = auth.user.id;
@@ -28,6 +30,22 @@ export class SessionGuard implements CanActivate {
     req.authRole = auth.user.role;
     req.activeCabinetId = auth.session.activeCabinetId;
     return true;
+  }
+
+  /**
+   * API writes signed cookies (`signed: true`), so we must unsign before using
+   * the value as Session.id. Keep plain cookie fallback for old sessions.
+   */
+  private extractSessionId(req: RequestWithUser, rawCookie: string): string | null {
+    const maybeReq = req as unknown as {
+      unsignCookie?: (value: string) => { valid: boolean; value: string | null };
+    };
+    if (typeof maybeReq.unsignCookie === 'function') {
+      const unsign = maybeReq.unsignCookie(rawCookie);
+      if (unsign.valid && unsign.value) return unsign.value;
+      return null;
+    }
+    return rawCookie;
   }
 }
 
