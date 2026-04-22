@@ -30,6 +30,13 @@ interface CommandResult {
   finishedAt: string | null;
 }
 
+interface QrResultPayload {
+  qrUrl?: string;
+  qr_url?: string;
+  expiresAt?: string;
+  expires_at?: string;
+}
+
 export function UserbotPanel({
   initialSession,
   initialChannels,
@@ -42,6 +49,19 @@ export function UserbotPanel({
   const [qr, setQr] = useState<{ commandId: string; url: string | null; expiresAt: string | null } | null>(null);
   const [newChannel, setNewChannel] = useState({ chatId: '', title: '', username: '' });
   const [msg, setMsg] = useState<string | null>(null);
+  function extractQr(resultJson: string | null): { url: string | null; expiresAt: string | null } | null {
+    if (!resultJson) return null;
+    try {
+      const data = JSON.parse(resultJson) as QrResultPayload;
+      const url = data.qrUrl ?? data.qr_url ?? null;
+      const expiresAt = data.expiresAt ?? data.expires_at ?? null;
+      if (!url) return null;
+      return { url, expiresAt };
+    } catch {
+      return null;
+    }
+  }
+
 
   async function refetch() {
     const [s, c] = await Promise.all([
@@ -71,17 +91,12 @@ export function UserbotPanel({
       const res = await fetch(`/api/proxy/userbot/commands/${commandId}`, { cache: 'no-store' });
       if (!res.ok) continue;
       const cmd = (await res.json()) as CommandResult;
-      if (cmd.status === 'done' || cmd.status === 'error') return cmd;
-      if (cmd.status === 'in_progress' && cmd.resultJson) {
-        const data = JSON.parse(cmd.resultJson) as { qrUrl?: string; expiresAt?: string };
-        if (data.qrUrl) {
-          setQr({
-            commandId,
-            url: data.qrUrl,
-            expiresAt: data.expiresAt ?? null,
-          });
-        }
+      const qrData = extractQr(cmd.resultJson);
+      if (qrData) {
+        setQr({ commandId, url: qrData.url, expiresAt: qrData.expiresAt });
+        return cmd;
       }
+      if (cmd.status === 'done' || cmd.status === 'error') return cmd;
     }
     return null;
   }
@@ -92,11 +107,13 @@ export function UserbotPanel({
     if (!cmd) return;
     setQr({ commandId: cmd.commandId, url: null, expiresAt: null });
     const result = await pollCommand(cmd.commandId);
-    if (result?.status === 'done') {
-      setMsg('Сессия успешно создана.');
-      setQr(null);
-    } else if (result?.status === 'error') {
+    const qrFromResult = extractQr(result?.resultJson ?? null);
+    if (result?.status === 'error') {
       setMsg(`Ошибка: ${result.error}`);
+    } else if (qrFromResult?.url) {
+      setMsg('QR получен. Отсканируйте его в Telegram и дождитесь статуса connected.');
+    } else if (result?.status === 'done') {
+      setMsg('Команда login_qr выполнена, ожидаем подтверждение входа в Telegram.');
     }
     await refetch();
   }
@@ -147,6 +164,12 @@ export function UserbotPanel({
     const id = setInterval(refetch, 15000);
     return () => clearInterval(id);
   }, []);
+
+  useEffect(() => {
+    if (session.status === 'connected') {
+      setQr(null);
+    }
+  }, [session.status]);
 
   return (
     <>

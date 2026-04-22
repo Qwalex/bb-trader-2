@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useTransition } from 'react';
+import { useRouter } from 'next/navigation';
 
 interface Cabinet {
   id: string;
@@ -17,6 +18,7 @@ interface Props {
 export function CabinetSelector({ cabinets, activeId }: Props) {
   const [selected, setSelected] = useState(activeId ?? '');
   const [pending, startTransition] = useTransition();
+  const router = useRouter();
 
   function onChange(e: React.ChangeEvent<HTMLSelectElement>) {
     const next = e.target.value;
@@ -27,7 +29,7 @@ export function CabinetSelector({ cabinets, activeId }: Props) {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ cabinetId: next || null }),
       });
-      window.location.reload();
+      router.refresh();
     });
   }
 
