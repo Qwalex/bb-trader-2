@@ -16,7 +16,8 @@ interface Props {
 /**
  * Telegram Login Widget — подгружает скрипт через `/api/telegram-widget` (серверный
  * fetch с telegram.org), чтобы клиент в сетях с блокировкой telegram.org получал JS
- * с вашего домена. Колбэк: window.onTelegramAuth → POST `/api/auth/telegram` → API.
+ * с вашего домена. В ответе применяется патч: иначе виджет строил бы iframe на
+ * `/{origin}/embed/Bot` и отдавал 404. Колбэк: window.onTelegramAuth → POST `/api/auth/telegram` → API.
  */
 export function TelegramLoginWidget({ botUsername, callbackUrl = '/' }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);

@@ -18,10 +18,34 @@ async function loadFromUpstream(): Promise<{ body: string; contentType: string }
     throw new Error(`upstream ${upstream.status}`);
   }
 
-  const body = await upstream.text();
+  let body = await upstream.text();
+  body = patchSelfHostedWidgetOrigin(body);
   const contentType =
     upstream.headers.get('content-type') || 'application/javascript; charset=utf-8';
   return { body, contentType };
+}
+
+/**
+ * Если `telegram-widget.js` отдаётся с нашего домена, `getWidgetsOrigin` в апстриме
+ * берёт origin из `document.currentScript.src` и строит iframe как `/embed/Bot` на **этом**
+ * домене → 404. Принудительно используем `default_origin` (oauth.telegram.org / t.me),
+ * когда скрипт не с официальных хостов Telegram.
+ */
+function patchSelfHostedWidgetOrigin(js: string): string {
+  const needle = `    } else if (origin == 'https://telegram-js.azureedge.net' || origin == 'https://tg.dev') {
+      origin = dev_origin;
+    }
+    return origin;`;
+  const replacement = `    } else if (origin == 'https://telegram-js.azureedge.net' || origin == 'https://tg.dev') {
+      origin = dev_origin;
+    } else if (origin != 'https://oauth.telegram.org' && origin != 'https://oauth.tg.dev') {
+      origin = default_origin;
+    }
+    return origin;`;
+  if (!js.includes(needle)) {
+    return js;
+  }
+  return js.replace(needle, replacement);
 }
 
 /**
