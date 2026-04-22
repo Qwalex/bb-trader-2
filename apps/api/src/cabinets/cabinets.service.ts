@@ -1,6 +1,9 @@
 import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import type { PrismaClient } from '@repo/shared-prisma';
+import { getQueueClient } from '@repo/shared-queue';
 import {
+  PollCabinetPositionsPayload,
+  QUEUE_NAMES,
   encryptSecret,
   type CabinetDto,
   type CreateCabinetDto,
@@ -120,6 +123,22 @@ export class CabinetsService {
         lastVerifyError: null,
       },
     });
+
+    // Trigger immediate verification in trader; do not wait for cron tick.
+    const queue = await getQueueClient({
+      connectionString: this.config.DATABASE_URL,
+      application_name: 'bb-api',
+    });
+    await queue.send(
+      QUEUE_NAMES.pollCabinetPositions,
+      PollCabinetPositionsPayload,
+      { cabinetId },
+      {
+        singletonKey: `poll-cabinet:${cabinetId}`,
+        retryLimit: 5,
+        retryDelaySeconds: 10,
+      },
+    );
   }
 
   async getSettings(userId: string, cabinetId: string) {
