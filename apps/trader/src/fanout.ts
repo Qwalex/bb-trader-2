@@ -74,6 +74,9 @@ export class SignalFanoutService {
       );
     }
 
+    let executedCount = 0;
+    let failedCount = 0;
+    let skippedCount = 0;
     for (const cabinet of cabinets) {
       const filters: Array<{
         userbotChannel: { chatId: string };
@@ -87,10 +90,12 @@ export class SignalFanoutService {
       const hasExplicit = filters.some((f) => f.userbotChannel.chatId === draft.sourceChatId);
       if (hasExplicit && !channelFilter) {
         await this.recordSkip(cabinet.id, draft.id, 'channel_disabled_for_cabinet');
+        skippedCount += 1;
         continue;
       }
       if (!cabinet.bybitKey) {
         await this.recordSkip(cabinet.id, draft.id, 'no_bybit_key');
+        skippedCount += 1;
         continue;
       }
 
@@ -112,39 +117,65 @@ export class SignalFanoutService {
         const entries = JSON.parse(draft.entries) as number[];
         const takeProfits = JSON.parse(draft.takeProfits) as number[];
 
-        const cabinetSignal = await prisma.cabinetSignal.create({
-          data: {
-            cabinetId: cabinet.id,
-            signalDraftId: draft.id,
-            status: 'executing',
-            startedAt: new Date(),
+        const existingCabinetSignal = await prisma.cabinetSignal.findUnique({
+          where: {
+            cabinetId_signalDraftId: { cabinetId: cabinet.id, signalDraftId: draft.id },
           },
+          select: { id: true, signalId: true, status: true },
         });
+        if (existingCabinetSignal?.status === 'executed') {
+          logger.info(
+            { signalDraftId: draft.id, cabinetId: cabinet.id },
+            'trader.fanout.cabinet_already_executed',
+          );
+          executedCount += 1;
+          continue;
+        }
 
-        const signal = await prisma.signal.create({
-          data: {
-            cabinetId: cabinet.id,
-            userId: input.userId,
-            pair: draft.pair,
-            direction: draft.direction,
-            entries: draft.entries,
-            entryIsRange: draft.entryIsRange,
-            stopLoss: draft.stopLoss,
-            takeProfits: draft.takeProfits,
-            leverage,
-            orderUsd: defaultOrderUsd,
-            source: 'userbot',
-            sourceChatId: draft.sourceChatId,
-            sourceMessageId: draft.sourceMessageId,
-            rawMessage: draft.rawMessage,
-            status: 'PENDING',
-          },
-        });
+        const cabinetSignal = existingCabinetSignal
+          ? await prisma.cabinetSignal.update({
+              where: { id: existingCabinetSignal.id },
+              data: { status: 'executing', error: null, startedAt: new Date(), finishedAt: null },
+            })
+          : await prisma.cabinetSignal.create({
+              data: {
+                cabinetId: cabinet.id,
+                signalDraftId: draft.id,
+                status: 'executing',
+                startedAt: new Date(),
+              },
+            });
 
-        await prisma.cabinetSignal.update({
-          where: { id: cabinetSignal.id },
-          data: { signalId: signal.id },
-        });
+        const signal = existingCabinetSignal?.signalId
+          ? await prisma.signal.findUniqueOrThrow({
+              where: { id: existingCabinetSignal.signalId },
+            })
+          : await prisma.signal.create({
+              data: {
+                cabinetId: cabinet.id,
+                userId: input.userId,
+                pair: draft.pair,
+                direction: draft.direction,
+                entries: draft.entries,
+                entryIsRange: draft.entryIsRange,
+                stopLoss: draft.stopLoss,
+                takeProfits: draft.takeProfits,
+                leverage,
+                orderUsd: defaultOrderUsd,
+                source: 'userbot',
+                sourceChatId: draft.sourceChatId,
+                sourceMessageId: draft.sourceMessageId,
+                rawMessage: draft.rawMessage,
+                status: 'PENDING',
+              },
+            });
+
+        if (!existingCabinetSignal?.signalId) {
+          await prisma.cabinetSignal.update({
+            where: { id: cabinetSignal.id },
+            data: { signalId: signal.id },
+          });
+        }
 
         await this.opts.orderService.placeSignalOrders({
           signalId: signal.id,
@@ -173,6 +204,7 @@ export class SignalFanoutService {
           { signalDraftId: draft.id, cabinetId: cabinet.id, signalId: signal.id },
           'trader.fanout.cabinet_executed',
         );
+        executedCount += 1;
       } catch (error) {
         const msg = errorMessage(error);
         logger.error(
@@ -196,12 +228,36 @@ export class SignalFanoutService {
             finishedAt: new Date(),
           },
         });
+        const existingSignal = await prisma.signal.findFirst({
+          where: {
+            cabinetId: cabinet.id,
+            userId: input.userId,
+            sourceChatId: draft.sourceChatId,
+            sourceMessageId: draft.sourceMessageId,
+            deletedAt: null,
+          },
+          orderBy: { createdAt: 'desc' },
+          select: { id: true, status: true },
+        });
+        if (existingSignal && existingSignal.status === 'PENDING') {
+          await prisma.signal.update({
+            where: { id: existingSignal.id },
+            data: { status: 'FAILED', closedAt: new Date() },
+          });
+        }
+        failedCount += 1;
       }
     }
 
     await prisma.signalDraft.update({
       where: { id: draft.id },
-      data: { status: 'fanned_out' },
+      data: {
+        status: failedCount > 0 && executedCount === 0 ? 'rejected' : 'fanned_out',
+        rejectReason:
+          failedCount > 0 && executedCount === 0
+            ? `fanout failed for all cabinets; failed=${failedCount}, skipped=${skippedCount}`
+            : null,
+      },
     });
   }
 

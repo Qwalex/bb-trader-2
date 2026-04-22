@@ -8,6 +8,7 @@ import { HealthModule } from './health/health.module.js';
 import { PrismaModule } from './prisma.module.js';
 import { TradesModule } from './trades/trades.module.js';
 import { UserbotModule } from './userbot/userbot.module.js';
+import { WatchdogModule } from './watchdog/watchdog.module.js';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { UserbotModule } from './userbot/userbot.module.js';
     HealthModule,
     AuthModule,
     AdminModule,
+    WatchdogModule,
     CabinetsModule,
     UserbotModule,
     DashboardModule,

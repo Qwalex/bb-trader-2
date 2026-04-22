@@ -19,6 +19,7 @@ export class BybitPositionService {
     try {
       const client = await this.registry.getClient(cabinetId);
       const balance = await client.getWalletBalance({ accountType: 'UNIFIED' });
+      assertBybitOk(balance, 'getWalletBalance');
       const totalEquity = Number(balance.result?.list?.[0]?.totalEquity ?? 0);
       if (Number.isFinite(totalEquity) && totalEquity > 0) {
         await this.prisma.balanceSnapshot.create({
@@ -58,6 +59,8 @@ export class BybitPositionService {
         client.getPositionInfo({ category: 'linear', symbol: signal.pair }),
         client.getActiveOrders({ category: 'linear', symbol: signal.pair }),
       ]);
+      assertBybitOk(positions, 'getPositionInfo');
+      assertBybitOk(activeOrders, 'getActiveOrders');
       const expectedSide = signal.direction === 'BUY' ? 'Buy' : 'Sell';
       const hasPosition = Boolean(
         positions.result?.list?.some((p) => p.side === expectedSide && Number(p.size ?? 0) > 0),
@@ -153,6 +156,7 @@ export class BybitPositionService {
         endTime: now,
         limit: 50,
       });
+      assertBybitOk(res, 'getClosedPnL');
       const rows = res.result?.list ?? [];
       if (!rows.length) return null;
       const filtered = rows.filter((row: { orderId?: string | null }) =>
@@ -192,4 +196,19 @@ export class BybitPositionService {
 function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+function assertBybitOk(
+  response: { retCode?: number | string; retMsg?: string } | null | undefined,
+  operation: string,
+): void {
+  if (!response) {
+    throw new Error(`Bybit ${operation} returned empty response`);
+  }
+  const codeNum = Number(response.retCode ?? 0);
+  if (!Number.isFinite(codeNum) || codeNum !== 0) {
+    throw new Error(
+      `Bybit ${operation} failed: retCode=${String(response.retCode)} retMsg=${response.retMsg ?? ''}`.trim(),
+    );
+  }
 }

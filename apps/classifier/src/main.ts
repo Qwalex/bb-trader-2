@@ -21,6 +21,7 @@ async function main(): Promise<void> {
 
   // pg-boss v10 требует явного createQueue
   await queue.createQueue(QUEUE_NAMES.executeSignal);
+  await queue.createQueue(QUEUE_NAMES.executeLifecycle);
   await queue.createQueue(QUEUE_NAMES.diagnosticsRun);
 
   const openrouter = new OpenRouterClient({

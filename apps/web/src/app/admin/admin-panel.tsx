@@ -15,15 +15,27 @@ interface AppLog {
   createdAt: string;
 }
 
+interface PipelineSummary {
+  stuck: {
+    ingestClassifying: number;
+    userbotCommands: number;
+    recalcJobs: number;
+  };
+  checkedAt: string;
+}
+
 export function AdminPanel({
   initialSettings,
   initialLogs,
+  initialPipeline,
 }: {
   initialSettings: GlobalSetting[];
   initialLogs: AppLog[];
+  initialPipeline: PipelineSummary;
 }) {
   const [settings, setSettings] = useState(initialSettings);
   const [logs, setLogs] = useState(initialLogs);
+  const [pipeline, setPipeline] = useState(initialPipeline);
   const [msg, setMsg] = useState<string | null>(null);
 
   async function saveSetting(key: string, value: string) {
@@ -61,6 +73,12 @@ export function AdminPanel({
     const res = await fetch('/api/proxy/admin/logs?limit=200', { cache: 'no-store' });
     if (!res.ok) return;
     setLogs(await res.json());
+  }
+
+  async function refreshPipeline() {
+    const res = await fetch('/api/proxy/admin/pipeline-summary', { cache: 'no-store' });
+    if (!res.ok) return;
+    setPipeline(await res.json());
   }
 
   return (
@@ -102,6 +120,20 @@ export function AdminPanel({
           </button>
           <button className="danger" onClick={() => void runRecalc(false)}>
             Recalc PnL (apply)
+          </button>
+        </div>
+      </div>
+      <div className="card">
+        <h2>Pipeline health</h2>
+        <p style={{ marginBottom: 8 }}>
+          Last check: {new Date(pipeline.checkedAt).toLocaleString()}
+        </p>
+        <div className="row">
+          <span>Stuck classifying: {pipeline.stuck.ingestClassifying}</span>
+          <span>Stuck userbot commands: {pipeline.stuck.userbotCommands}</span>
+          <span>Stuck recalc jobs: {pipeline.stuck.recalcJobs}</span>
+          <button className="ghost" onClick={() => void refreshPipeline()}>
+            Refresh
           </button>
         </div>
       </div>

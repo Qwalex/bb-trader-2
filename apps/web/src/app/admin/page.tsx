@@ -9,6 +9,15 @@ interface Me {
   role: 'user' | 'admin';
 }
 
+interface PipelineSummary {
+  stuck: {
+    ingestClassifying: number;
+    userbotCommands: number;
+    recalcJobs: number;
+  };
+  checkedAt: string;
+}
+
 export default async function AdminPage() {
   let me: Me;
   try {
@@ -20,11 +29,12 @@ export default async function AdminPage() {
   }
   if (me.role !== 'admin') redirect('/');
 
-  const [settings, logs] = await Promise.all([
+  const [settings, logs, pipeline] = await Promise.all([
     apiFetch<Array<{ key: string; value: string }>>('/admin/global-settings'),
     apiFetch<Array<{ id: string; level: string; category: string; message: string; createdAt: string }>>(
       '/admin/logs?limit=200',
     ),
+    apiFetch<PipelineSummary>('/admin/pipeline-summary'),
   ]);
 
   return (
@@ -32,7 +42,7 @@ export default async function AdminPage() {
       <TopNav />
       <div className="container">
         <h1>Admin</h1>
-        <AdminPanel initialSettings={settings} initialLogs={logs} />
+        <AdminPanel initialSettings={settings} initialLogs={logs} initialPipeline={pipeline} />
       </div>
     </>
   );

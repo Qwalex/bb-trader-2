@@ -39,44 +39,62 @@ export class OpenRouterClient {
       messages,
       temperature: overrides.temperature ?? 0,
     };
+    const maxAttempts = 3;
+    let lastError: Error | null = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), this.opts.timeoutMs);
+      try {
+        const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${this.opts.apiKey}`,
+            'HTTP-Referer': 'https://bb-trade-transformation',
+            'X-Title': 'bb-classifier',
+          },
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
 
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.opts.timeoutMs);
+        if (!response.ok) {
+          const text = await safeText(response);
+          const shouldRetry = response.status === 429 || response.status >= 500;
+          const error = new Error(`OpenRouter ${response.status}: ${text.slice(0, 500)}`);
+          if (!shouldRetry || attempt === maxAttempts) throw error;
+          await sleep(backoffMs(attempt));
+          continue;
+        }
 
-    try {
-      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.opts.apiKey}`,
-          'HTTP-Referer': 'https://bb-trade-transformation',
-          'X-Title': 'bb-classifier',
-        },
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
+        const json = (await response.json()) as {
+          id?: string;
+          choices?: { message?: { content?: string } }[];
+          usage?: { prompt_tokens?: number; completion_tokens?: number };
+        };
 
-      if (!response.ok) {
-        const text = await safeText(response);
-        throw new Error(`OpenRouter ${response.status}: ${text.slice(0, 500)}`);
+        const content = json.choices?.[0]?.message?.content ?? '';
+        return {
+          content,
+          generationId: json.id ?? null,
+          inputTokens: json.usage?.prompt_tokens ?? null,
+          outputTokens: json.usage?.completion_tokens ?? null,
+        };
+      } catch (error) {
+        const asError = error instanceof Error ? error : new Error(String(error));
+        lastError = asError;
+        const shouldRetry =
+          attempt < maxAttempts && (asError.name === 'AbortError' || /fetch|timeout|OpenRouter 5|OpenRouter 429/i.test(asError.message));
+        if (!shouldRetry) throw asError;
+        this.opts.logger.warn(
+          { attempt, error: asError.message, model },
+          'classifier.openrouter.retry',
+        );
+        await sleep(backoffMs(attempt));
+      } finally {
+        clearTimeout(timer);
       }
-
-      const json = (await response.json()) as {
-        id?: string;
-        choices?: { message?: { content?: string } }[];
-        usage?: { prompt_tokens?: number; completion_tokens?: number };
-      };
-
-      const content = json.choices?.[0]?.message?.content ?? '';
-      return {
-        content,
-        generationId: json.id ?? null,
-        inputTokens: json.usage?.prompt_tokens ?? null,
-        outputTokens: json.usage?.completion_tokens ?? null,
-      };
-    } finally {
-      clearTimeout(timer);
     }
+    throw lastError ?? new Error('OpenRouter request failed');
   }
 }
 
@@ -86,4 +104,12 @@ async function safeText(response: Response): Promise<string> {
   } catch {
     return '';
   }
+}
+
+function backoffMs(attempt: number): number {
+  return Math.min(5000, 300 * 2 ** (attempt - 1));
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

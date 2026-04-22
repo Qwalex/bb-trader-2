@@ -5,12 +5,14 @@ import type { PrismaClient } from '@repo/shared-prisma';
 import { APP_CONFIG } from '../config.module.js';
 import type { AppConfig } from '../config.js';
 import { PRISMA } from '../prisma.module.js';
+import { WatchdogService } from '../watchdog/watchdog.service.js';
 
 @Injectable()
 export class AdminService {
   constructor(
     @Inject(PRISMA) private readonly prisma: PrismaClient,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
+    private readonly watchdog: WatchdogService,
   ) {}
 
   async listGlobalSettings() {
@@ -41,6 +43,10 @@ export class AdminService {
       ...row,
       createdAt: row.createdAt.toISOString(),
     }));
+  }
+
+  async pipelineSummary() {
+    return this.watchdog.getPipelineSummary();
   }
 
   async runDiagnostics(triggeredByUserId: string | null, models: string[], caseIds?: string[]) {

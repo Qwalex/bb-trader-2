@@ -17,6 +17,14 @@ const Env = z.object({
     z.coerce.number().int().positive().optional(),
   ),
   SESSION_TTL_DAYS: z.coerce.number().int().positive().default(30),
+  WATCHDOG_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  WATCHDOG_INTERVAL_MS: z.coerce.number().int().positive().default(60000),
+  WATCHDOG_INGEST_STUCK_MS: z.coerce.number().int().positive().default(10 * 60 * 1000),
+  WATCHDOG_USERBOT_COMMAND_STUCK_MS: z.coerce.number().int().positive().default(10 * 60 * 1000),
+  WATCHDOG_RECALC_STUCK_MS: z.coerce.number().int().positive().default(30 * 60 * 1000),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace']).default('info'),
 });
 

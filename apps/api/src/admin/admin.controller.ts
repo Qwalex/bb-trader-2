@@ -56,6 +56,11 @@ export class AdminController {
     return this.admin.listLogs(Number.isFinite(parsed) ? parsed : 200, level, category);
   }
 
+  @Get('pipeline-summary')
+  pipelineSummary() {
+    return this.admin.pipelineSummary();
+  }
+
   @Post('diagnostics/run')
   async runDiagnostics(@Req() req: RequestWithUser, @Body() body: unknown) {
     const parsed = RunDiagnosticsBody.safeParse(body);

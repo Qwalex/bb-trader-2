@@ -1,6 +1,7 @@
 import { getPrisma, disconnectPrisma } from '@repo/shared-prisma';
 import { getQueueClient, disconnectQueueClient } from '@repo/shared-queue';
 import {
+  ExecuteLifecyclePayload,
   ExecuteSignalPayload,
   PollCabinetPositionsPayload,
   RecalcClosedPnlPayload,
@@ -14,6 +15,7 @@ import { BybitPositionService } from './bybit/position-service.js';
 import { SignalFanoutService } from './fanout.js';
 import { handlePollCabinetPositions } from './poll-worker.js';
 import { handleRecalcClosedPnl } from './recalc-worker.js';
+import { handleLifecycleEvent } from './lifecycle-worker.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -27,6 +29,7 @@ async function main(): Promise<void> {
   });
 
   await queue.createQueue(QUEUE_NAMES.executeSignal);
+  await queue.createQueue(QUEUE_NAMES.executeLifecycle);
   await queue.createQueue(QUEUE_NAMES.pollCabinetPositions);
   await queue.createQueue(QUEUE_NAMES.recalcClosedPnl);
 
@@ -51,6 +54,24 @@ async function main(): Promise<void> {
         userId: payload.userId,
         onlyCabinetId: payload.cabinetId,
       });
+    },
+  });
+
+  const executeLifecycleWorker = await queue.work({
+    queue: QUEUE_NAMES.executeLifecycle,
+    schema: ExecuteLifecyclePayload,
+    pollingIntervalSeconds: 2,
+    handlerTimeoutSeconds: 240,
+    handler: async (payload) => {
+      await handleLifecycleEvent(
+        { prisma, registry, logger },
+        {
+          signalEventId: payload.signalEventId,
+          signalId: payload.signalId,
+          cabinetId: payload.cabinetId,
+          eventType: payload.eventType,
+        },
+      );
     },
   });
 
@@ -85,16 +106,24 @@ async function main(): Promise<void> {
     },
   });
 
+  await queue.unschedule(QUEUE_NAMES.pollCabinetPositions);
   await queue.schedule(QUEUE_NAMES.pollCabinetPositions, config.POLL_CABINET_POSITIONS_CRON);
 
   logger.info(
-    { executeSignalWorker, pollWorker, recalcClosedPnlWorker, clientCacheMax: registry.size() },
+    {
+      executeSignalWorker,
+      executeLifecycleWorker,
+      pollWorker,
+      recalcClosedPnlWorker,
+      clientCacheMax: registry.size(),
+    },
     'trader.ready',
   );
 
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'trader.shutdown.begin');
     await queue.offWork(executeSignalWorker);
+    await queue.offWork(executeLifecycleWorker);
     await queue.offWork(pollWorker);
     await queue.offWork(recalcClosedPnlWorker);
     await disconnectQueueClient();

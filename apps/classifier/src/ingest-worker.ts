@@ -5,7 +5,7 @@
  */
 
 import type { PrismaClient } from '@repo/shared-prisma';
-import { ExecuteSignalPayload, QUEUE_NAMES } from '@repo/shared-ts';
+import { ExecuteLifecyclePayload, ExecuteSignalPayload, QUEUE_NAMES } from '@repo/shared-ts';
 import type { QueueClient } from '@repo/shared-queue';
 import type { AppLogger } from './logger.js';
 import { classifyByPatterns } from './classify.js';
@@ -85,6 +85,35 @@ export class IngestWorker {
     const { prisma, logger, openrouter, queue } = this.opts;
     const text = row.text ?? '';
     const hasReply = Boolean(row.replyToText);
+    const mediaKind = extractMediaKind(row.rawJson);
+
+    if (!text.trim() && mediaKind) {
+      await prisma.ingestEvent.update({
+        where: { id: row.id },
+        data: {
+          status: 'failed',
+          classification: 'ignore',
+          classifyError: `unsupported_media_without_text:${mediaKind}`,
+          classifiedAt: new Date(),
+        },
+      });
+      await prisma.appLog.create({
+        data: {
+          userId: row.userId,
+          level: 'warn',
+          category: 'classifier',
+          service: 'classifier',
+          message: 'ingest skipped: media without text',
+          payload: JSON.stringify({
+            ingestId: row.id,
+            mediaKind,
+            chatId: row.chatId,
+            messageId: row.messageId,
+          }),
+        },
+      });
+      return;
+    }
 
     const classification = await classifyByPatterns(prisma, { text, hasReply });
 
@@ -180,24 +209,7 @@ export class IngestWorker {
     row: IngestRow,
     classification: 'close' | 'result' | 'reentry' | 'ignore',
   ): Promise<void> {
-    const { prisma, logger } = this.opts;
-    const latestSignal = await prisma.signal.findFirst({
-      where: row.replyToMessageId
-        ? {
-            userId: row.userId,
-            sourceChatId: row.chatId,
-            sourceMessageId: row.replyToMessageId,
-            deletedAt: null,
-          }
-        : {
-            userId: row.userId,
-            sourceChatId: row.chatId,
-            deletedAt: null,
-            status: { in: ['OPEN', 'ORDERS_PLACED'] },
-          },
-      orderBy: { createdAt: 'desc' },
-      select: { id: true, cabinetId: true, status: true, sourceMessageId: true },
-    });
+    const { prisma, logger, queue } = this.opts;
     await prisma.ingestEvent.update({
       where: { id: row.id },
       data: {
@@ -206,34 +218,81 @@ export class IngestWorker {
         classifiedAt: new Date(),
       },
     });
-    if (!latestSignal || classification === 'ignore') {
+    if (classification === 'ignore') {
       logger.debug({ ingestId: row.id, kind: classification }, 'classifier.ignored');
       return;
     }
-    await prisma.signalEvent.create({
-      data: {
-        cabinetId: latestSignal.cabinetId,
-        signalId: latestSignal.id,
-        type: classification,
-        payload: JSON.stringify({
-          ingestId: row.id,
-          text: row.text,
-          replyToText: row.replyToText,
-          replyToMessageId: row.replyToMessageId,
-        }),
-      },
+
+    const candidateSignals = await prisma.signal.findMany({
+      where: row.replyToMessageId
+        ? {
+            userId: row.userId,
+            sourceChatId: row.chatId,
+            sourceMessageId: row.replyToMessageId,
+            deletedAt: null,
+            status: { in: ['OPEN', 'ORDERS_PLACED', 'PENDING'] },
+          }
+        : {
+            userId: row.userId,
+            sourceChatId: row.chatId,
+            deletedAt: null,
+            status: { in: ['OPEN', 'ORDERS_PLACED'] },
+          },
+      select: { id: true, cabinetId: true, sourceMessageId: true },
+      orderBy: { createdAt: 'desc' },
+      take: row.replyToMessageId ? 20 : 50,
     });
-    if (classification === 'close' && ['OPEN', 'ORDERS_PLACED'].includes(latestSignal.status)) {
-      await prisma.signal.update({
-        where: { id: latestSignal.id },
+
+    if (candidateSignals.length === 0) {
+      logger.info(
+        {
+          ingestId: row.id,
+          kind: classification,
+          chatId: row.chatId,
+          replyToMessageId: row.replyToMessageId,
+        },
+        'classifier.lifecycle.no_matching_signal',
+      );
+      return;
+    }
+
+    for (const signal of candidateSignals) {
+      const event = await prisma.signalEvent.create({
         data: {
-          status: 'CLOSED_MIXED',
-          closedAt: new Date(),
+          cabinetId: signal.cabinetId,
+          signalId: signal.id,
+          type: classification,
+          payload: JSON.stringify({
+            ingestId: row.id,
+            text: row.text,
+            replyToText: row.replyToText,
+            sourceMessageId: row.messageId,
+            replyToMessageId: row.replyToMessageId,
+          }),
         },
       });
+      await queue.send(
+        QUEUE_NAMES.executeLifecycle,
+        ExecuteLifecyclePayload,
+        {
+          signalEventId: event.id,
+          signalId: signal.id,
+          cabinetId: signal.cabinetId,
+          userId: row.userId,
+          eventType: classification,
+          sourceChatId: row.chatId,
+          sourceMessageId: row.messageId,
+          replyToMessageId: row.replyToMessageId,
+        },
+        {
+          singletonKey: `lifecycle:${event.id}`,
+          retryLimit: 5,
+          retryDelaySeconds: 10,
+        },
+      );
     }
     logger.info(
-      { ingestId: row.id, signalId: latestSignal.id, kind: classification },
+      { ingestId: row.id, matchedSignals: candidateSignals.length, kind: classification },
       'classifier.lifecycle_event',
     );
   }
@@ -247,6 +306,16 @@ export class IngestWorker {
     } catch {
       return text;
     }
+  }
+}
+
+function extractMediaKind(rawJson: string | null): string | null {
+  if (!rawJson) return null;
+  try {
+    const raw = JSON.parse(rawJson) as { mediaKind?: string | null };
+    return raw.mediaKind ?? null;
+  } catch {
+    return null;
   }
 }
 

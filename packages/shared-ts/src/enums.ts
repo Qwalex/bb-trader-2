@@ -114,6 +114,7 @@ export type BybitNetwork = (typeof BYBIT_NETWORKS)[number];
 export const QUEUE_NAMES = {
   classifyMessage: 'classify.message',
   executeSignal: 'execute.signal',
+  executeLifecycle: 'execute.lifecycle',
   pollCabinetPositions: 'poll.cabinet_positions',
   userbotCommand: 'userbot.command',
   recalcClosedPnl: 'recalc.closed_pnl',

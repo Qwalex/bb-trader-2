@@ -56,12 +56,13 @@ export class BybitOrderService {
 
   private async setLeverage(client: RestClientV5, symbol: string, leverage: number): Promise<void> {
     try {
-      await client.setLeverage({
+      const res = await client.setLeverage({
         category: 'linear',
         symbol,
         buyLeverage: String(leverage),
         sellLeverage: String(leverage),
       });
+      assertBybitOk(res, 'setLeverage');
     } catch (error) {
       // Bybit вернёт 110043 если уже установлено — не считаем это ошибкой.
       const msg = errorMessage(error);
@@ -116,6 +117,7 @@ export class BybitOrderService {
         timeInForce: 'GTC',
         reduceOnly: false,
       });
+      assertBybitOk(response, 'submitOrder(entry)');
       await this.prisma.order.create({
         data: {
           cabinetId: input.cabinetId,
@@ -154,6 +156,7 @@ export class BybitOrderService {
         timeInForce: 'GTC',
         reduceOnly: true,
       });
+      assertBybitOk(response, 'submitOrder(tp)');
       await this.prisma.order.create({
         data: {
           cabinetId: input.cabinetId,
@@ -170,13 +173,14 @@ export class BybitOrderService {
     }
     // Also set protective stop on exchange.
     try {
-      await client.setTradingStop({
+      const stopRes = await client.setTradingStop({
         category: 'linear',
         symbol: input.pair,
         stopLoss: String(input.stopLoss),
         tpslMode: 'Partial',
         positionIdx: 0,
       });
+      assertBybitOk(stopRes, 'setTradingStop');
       await this.prisma.order.create({
         data: {
           cabinetId: input.cabinetId,
@@ -250,4 +254,19 @@ function splitQtyChunks(totalQty: number, chunks: number): number[] {
 function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+function assertBybitOk(
+  response: { retCode?: number | string; retMsg?: string } | null | undefined,
+  operation: string,
+): void {
+  if (!response) {
+    throw new Error(`Bybit ${operation} returned empty response`);
+  }
+  const codeNum = Number(response.retCode ?? 0);
+  if (!Number.isFinite(codeNum) || codeNum !== 0) {
+    throw new Error(
+      `Bybit ${operation} failed: retCode=${String(response.retCode)} retMsg=${response.retMsg ?? ''}`.trim(),
+    );
+  }
 }

@@ -75,6 +75,7 @@ export async function handleRecalcClosedPnl(
         endTime: now,
         limit: 100,
       });
+      assertBybitOk(closed, 'getClosedPnL');
       const rows = closed.result?.list ?? [];
       if (!rows.length) continue;
       const filtered = rows.filter((row: { orderId?: string | null }) =>
@@ -108,4 +109,19 @@ export async function handleRecalcClosedPnl(
       resultJson: JSON.stringify({ scanned, updated, dryRun: payload.dryRun }),
     },
   });
+}
+
+function assertBybitOk(
+  response: { retCode?: number | string; retMsg?: string } | null | undefined,
+  operation: string,
+): void {
+  if (!response) {
+    throw new Error(`Bybit ${operation} returned empty response`);
+  }
+  const codeNum = Number(response.retCode ?? 0);
+  if (!Number.isFinite(codeNum) || codeNum !== 0) {
+    throw new Error(
+      `Bybit ${operation} failed: retCode=${String(response.retCode)} retMsg=${response.retMsg ?? ''}`.trim(),
+    );
+  }
 }

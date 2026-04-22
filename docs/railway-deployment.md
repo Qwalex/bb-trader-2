@@ -80,6 +80,11 @@ pnpm -r typecheck
 | `OPENROUTER_MODEL` | напр. `anthropic/claude-3.5-sonnet` | |
 | `NODE_ENV` | `production` | |
 | `LOG_LEVEL` | `info` | |
+| `WATCHDOG_ENABLED` | `true` | включает автоматическое восстановление stuck jobs в API |
+| `WATCHDOG_INTERVAL_MS` | `60000` | период watchdog-тика |
+| `WATCHDOG_INGEST_STUCK_MS` | `600000` | порог для `IngestEvent.status='classifying'` |
+| `WATCHDOG_USERBOT_COMMAND_STUCK_MS` | `600000` | порог для `UserbotCommand.status='running'` |
+| `WATCHDOG_RECALC_STUCK_MS` | `1800000` | порог для `RecalcClosedPnlJob.status='running'` |
 
 Синтаксис `${{Postgres.DATABASE_URL}}` — это Railway-референс: при перегенерации пароля у БД все сервисы получат новое значение автоматически.
 
@@ -237,6 +242,13 @@ curl -i https://<api-domain>.up.railway.app/auth/me
 # HTTP/2 401
 ```
 
+И отдельная readiness-проба:
+
+```bash
+curl -i https://<api-domain>.up.railway.app/health/ready
+# HTTP/2 200 + pipeline summary
+```
+
 **`web`** — открыть `https://<web-domain>.up.railway.app/login`:
 - Должен отрендериться Telegram Login-виджет.
 - Если виджет не появился → домен не зарегистрирован в BotFather (часть 5).
@@ -293,6 +305,8 @@ curl -i https://<api-domain>.up.railway.app/auth/me
 
 - [ ] На каждом сервисе **Metrics → Memory** показывает RSS в пределах таблицы (см. ниже).
 - [ ] В `api` нет стектрейсов без контекста (искать `"level":50`).
+- [ ] `GET /health/ready` возвращает `ok=true`, а stuck-счётчики не растут.
+- [ ] `GET /admin/pipeline-summary` показывает ожидаемые статусы ingest/userbot/recalc.
 - [ ] На вкладке **Networking** у `api`/`web` включён **HTTPS redirect**.
 - [ ] Cкопирован доступ к Postgres-бэкапам (Railway → Postgres → **Backups** → снапшоты раз в сутки по умолчанию у Pro).
 - [ ] В `web` → Variables → `NEXT_PUBLIC_TELEGRAM_BOT_USERNAME` совпадает с реальным username бота.
