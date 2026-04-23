@@ -10,6 +10,9 @@ interface Me {
 }
 
 interface PipelineSummary {
+  ingestCounts?: Array<{ status: string; _count: { _all: number } }>;
+  commandCounts?: Array<{ status: string; _count: { _all: number } }>;
+  recalcCounts?: Array<{ status: string; _count: { _all: number } }>;
   stuck: {
     ingestClassifying: number;
     userbotCommands: number;

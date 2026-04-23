@@ -32,10 +32,7 @@ export class SessionGuard implements CanActivate {
     return true;
   }
 
-  /**
-   * API writes signed cookies (`signed: true`), so we must unsign before using
-   * the value as Session.id. Keep plain cookie fallback for old sessions.
-   */
+  /** API writes signed cookies (`signed: true`), so Session.id must always be unsiged first. */
   private extractSessionId(req: RequestWithUser, rawCookie: string): string | null {
     const maybeReq = req as unknown as {
       unsignCookie?: (value: string) => { valid: boolean; value: string | null };
@@ -45,7 +42,7 @@ export class SessionGuard implements CanActivate {
       if (unsign.valid && unsign.value) return unsign.value;
       return null;
     }
-    return rawCookie;
+    return null;
   }
 }
 

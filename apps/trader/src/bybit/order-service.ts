@@ -28,6 +28,8 @@ export interface PlaceSignalOrdersInput {
 }
 
 export class BybitOrderService {
+  private readonly qtyRulesCache = new Map<string, { minQty: number; qtyStep: number }>();
+
   constructor(
     private readonly registry: BybitClientRegistry,
     private readonly prisma: PrismaClient,
@@ -106,8 +108,12 @@ export class BybitOrderService {
       const entryPrice = normalizedEntries[i];
       if (entryPrice == null) continue;
       const orderUsd = entryChunks[i] ?? 0;
-      const qty = computeQtyFromUsd(orderUsd, entryPrice, input.leverage);
-      const response = await client.submitOrder({
+      const rawQty = computeQtyFromUsd(orderUsd, entryPrice, input.leverage);
+      const qty = await this.normalizeQty(client, input.pair, rawQty);
+      if (qty <= 0) {
+        throw new Error(`qty normalized to zero for ${input.pair} at entry=${entryPrice}`);
+      }
+      const response = await this.submitOrderWithRetry(client, {
         category: 'linear',
         symbol: input.pair,
         side,
@@ -138,7 +144,11 @@ export class BybitOrderService {
   private async placeTpSl(client: RestClientV5, input: PlaceSignalOrdersInput): Promise<string[]> {
     const closeSide = input.direction === 'BUY' ? 'Sell' : 'Buy';
     const avgEntry = input.entries.reduce((acc, p) => acc + p, 0) / input.entries.length;
-    const qty = computeQtyFromUsd(input.orderUsd, avgEntry, input.leverage);
+    const qty = await this.normalizeQty(
+      client,
+      input.pair,
+      computeQtyFromUsd(input.orderUsd, avgEntry, input.leverage),
+    );
     const tps = [...input.takeProfits].sort((a, b) => (input.direction === 'BUY' ? a - b : b - a));
     const splitQty = splitQtyChunks(qty, Math.max(1, tps.length));
     const placed: string[] = [];
@@ -146,12 +156,14 @@ export class BybitOrderService {
       const tp = tps[i];
       if (tp == null || !Number.isFinite(tp) || tp <= 0) continue;
       const tpQty = splitQty[i] ?? 0;
-      const response = await client.submitOrder({
+      const normalizedTpQty = await this.normalizeQty(client, input.pair, tpQty);
+      if (normalizedTpQty <= 0) continue;
+      const response = await this.submitOrderWithRetry(client, {
         category: 'linear',
         symbol: input.pair,
         side: closeSide,
         orderType: 'Limit',
-        qty: tpQty.toString(),
+        qty: normalizedTpQty.toString(),
         price: tp.toString(),
         timeInForce: 'GTC',
         reduceOnly: true,
@@ -165,7 +177,7 @@ export class BybitOrderService {
           orderKind: 'TP',
           side: closeSide,
           price: tp,
-          qty: tpQty,
+          qty: normalizedTpQty,
           status: 'NEW',
         },
       });
@@ -227,6 +239,59 @@ export class BybitOrderService {
       data: { status: 'CANCELLED' },
     });
   }
+
+  private async normalizeQty(client: RestClientV5, symbol: string, rawQty: number): Promise<number> {
+    if (!Number.isFinite(rawQty) || rawQty <= 0) return 0;
+    const rules = await this.getQtyRules(client, symbol);
+    const stepped = Math.floor(rawQty / rules.qtyStep) * rules.qtyStep;
+    const normalized = Math.max(rules.minQty, stepped);
+    const rounded = Math.round(normalized * 1e8) / 1e8;
+    return rounded >= rules.minQty ? rounded : 0;
+  }
+
+  private async getQtyRules(client: RestClientV5, symbol: string): Promise<{ minQty: number; qtyStep: number }> {
+    const cached = this.qtyRulesCache.get(symbol);
+    if (cached) return cached;
+    const response = await client.getInstrumentsInfo({
+      category: 'linear',
+      symbol,
+    });
+    assertBybitOk(response, 'getInstrumentsInfo');
+    const info = response.result?.list?.[0];
+    const lot = info?.lotSizeFilter as
+      | { minOrderQty?: string | number; qtyStep?: string | number }
+      | undefined;
+    const minQty = Number(lot?.minOrderQty ?? 0.001);
+    const qtyStep = Number(lot?.qtyStep ?? 0.001);
+    const rules = {
+      minQty: Number.isFinite(minQty) && minQty > 0 ? minQty : 0.001,
+      qtyStep: Number.isFinite(qtyStep) && qtyStep > 0 ? qtyStep : 0.001,
+    };
+    this.qtyRulesCache.set(symbol, rules);
+    return rules;
+  }
+
+  private async submitOrderWithRetry(
+    client: RestClientV5,
+    payload: Parameters<RestClientV5['submitOrder']>[0],
+  ) {
+    const maxAttempts = 3;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        const response = await client.submitOrder(payload);
+        assertBybitOk(response, 'submitOrder');
+        return response;
+      } catch (error) {
+        lastError = error;
+        const message = errorMessage(error);
+        const retriable = /10001|10006|110043/.test(message);
+        if (!retriable || attempt === maxAttempts) throw error;
+        await sleep(attempt * 250);
+      }
+    }
+    throw lastError;
+  }
 }
 
 function computeQtyFromUsd(orderUsd: number, price: number, leverage: number): number {
@@ -254,6 +319,10 @@ function splitQtyChunks(totalQty: number, chunks: number): number[] {
 function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function assertBybitOk(

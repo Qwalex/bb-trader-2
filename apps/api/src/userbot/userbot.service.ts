@@ -21,12 +21,14 @@ import { encryptSecret } from '@repo/shared-ts';
 import { APP_CONFIG } from '../config.module.js';
 import type { AppConfig } from '../config.js';
 import { PRISMA } from '../prisma.module.js';
+import { SettingsResolverService } from '../settings-resolver.service.js';
 
 @Injectable()
 export class UserbotService {
   constructor(
     @Inject(PRISMA) private readonly prisma: PrismaClient,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
+    private readonly settings: SettingsResolverService,
   ) {}
 
   async getSession(userId: string): Promise<UserbotSessionDto> {
@@ -418,42 +420,25 @@ export class UserbotService {
     totalCredits: number | null;
     totalUsage: number | null;
     remainingCredits: number | null;
-    raw: unknown;
+    syncedAt: string | null;
   }> {
-    const setting = await this.prisma.globalSetting.findUnique({
-      where: { key: 'OPENROUTER_API_KEY' },
-      select: { value: true },
-    });
-    const apiKey = setting?.value || this.config.OPENROUTER_API_KEY;
-    if (!apiKey) {
-      throw new BadRequestException('OpenRouter API key is not set (OPENROUTER_API_KEY)');
+    const [safeCredits, safeUsage, remainingCredits, syncedAt] = await Promise.all([
+      this.settings.getGlobalNumber('OPENROUTER_TOTAL_CREDITS'),
+      this.settings.getGlobalNumber('OPENROUTER_TOTAL_USAGE'),
+      this.settings.getGlobalNumber('OPENROUTER_REMAINING_CREDITS'),
+      this.settings.getGlobal('OPENROUTER_CREDITS_SYNCED_AT', null),
+    ]);
+    if (safeCredits == null && safeUsage == null && remainingCredits == null) {
+      throw new BadRequestException(
+        'OpenRouter balance is not available yet. Wait for classifier credits sync.',
+      );
     }
-    const response = await fetch('https://openrouter.ai/api/v1/credits', {
-      headers: { Authorization: `Bearer ${apiKey}` },
-    });
-    if (!response.ok) {
-      throw new BadRequestException(`OpenRouter credits failed with ${response.status}`);
-    }
-    const json = (await response.json()) as {
-      data?: {
-        total_credits?: number | string;
-        total_usage?: number | string;
-      };
-      total_credits?: number | string;
-      total_usage?: number | string;
-    };
-    const totalCreditsRaw = json.data?.total_credits ?? json.total_credits ?? null;
-    const totalUsageRaw = json.data?.total_usage ?? json.total_usage ?? null;
-    const totalCredits = totalCreditsRaw == null ? null : Number(totalCreditsRaw);
-    const totalUsage = totalUsageRaw == null ? null : Number(totalUsageRaw);
-    const safeCredits = Number.isFinite(totalCredits) ? totalCredits : null;
-    const safeUsage = Number.isFinite(totalUsage) ? totalUsage : null;
     return {
       totalCredits: safeCredits,
       totalUsage: safeUsage,
       remainingCredits:
-        safeCredits != null && safeUsage != null ? Math.max(safeCredits - safeUsage, 0) : null,
-      raw: json,
+        remainingCredits ?? (safeCredits != null && safeUsage != null ? Math.max(safeCredits - safeUsage, 0) : null),
+      syncedAt,
     };
   }
 

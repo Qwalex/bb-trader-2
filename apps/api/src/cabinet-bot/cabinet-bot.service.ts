@@ -4,6 +4,7 @@ import { decryptSecret } from '@repo/shared-ts';
 import { APP_CONFIG } from '../config.module.js';
 import type { AppConfig } from '../config.js';
 import { PRISMA } from '../prisma.module.js';
+import { telegramSendMessage } from '../telegram/telegram-api.js';
 
 interface TelegramUpdate {
   message?: {
@@ -86,6 +87,21 @@ export class CabinetBotService {
         await this.sendMessage(bot.botTokenEncrypted, chatId, 'Это сообщение уже обработано ранее.');
         return { ok: true };
       }
+      await this.prisma.appLog.create({
+        data: {
+          userId: bot.cabinet.ownerUserId,
+          cabinetId: bot.cabinetId,
+          level: 'error',
+          category: 'telegram',
+          service: 'api',
+          message: 'cabinet bot intake failed',
+          payload: JSON.stringify({
+            chatId,
+            messageId: String(message.message_id),
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        },
+      });
       await this.sendMessage(
         bot.botTokenEncrypted,
         chatId,
@@ -341,19 +357,7 @@ export class CabinetBotService {
 
   private async sendMessage(encryptedToken: string, chatId: string, text: string): Promise<void> {
     const token = decryptSecret({ encryptionKey: this.config.APP_ENCRYPTION_KEY }, encryptedToken);
-    const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: text.slice(0, 4000),
-        disable_web_page_preview: true,
-      }),
-    });
-    const json = (await response.json()) as { ok?: boolean; description?: string };
-    if (!response.ok || json.ok === false) {
-      throw new Error(`Telegram sendMessage failed: ${json.description ?? response.statusText}`);
-    }
+    await telegramSendMessage(token, chatId, text);
   }
 }
 

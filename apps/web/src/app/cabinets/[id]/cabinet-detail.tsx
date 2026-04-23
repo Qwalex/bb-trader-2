@@ -45,6 +45,32 @@ interface CabinetBot {
   lastOutboundAt: string | null;
 }
 
+interface PublishGroup {
+  id: string;
+  cabinetId: string;
+  title: string;
+  chatId: string;
+  enabled: boolean;
+  publishEveryN: number;
+  signalCounter: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface MirrorMessage {
+  id: string;
+  publishGroupId: string;
+  ingestId: string;
+  sourceChatId: string;
+  sourceMessageId: string;
+  kind: string;
+  status: string;
+  targetChatId: string;
+  targetMessageId: string | null;
+  error: string | null;
+  createdAt: string;
+}
+
 const KNOWN_SETTINGS: Array<{ key: string; description: string; placeholder?: string }> = [
   { key: 'DEFAULT_ORDER_USD', description: 'Размер входа по умолчанию, USD', placeholder: '10' },
   { key: 'DEFAULT_LEVERAGE', description: 'Плечо по умолчанию', placeholder: '10' },
@@ -60,11 +86,15 @@ export function CabinetDetail({
   initialSettings,
   initialChannelFilters,
   initialCabinetBot,
+  initialPublishGroups,
+  initialMirrorMessages,
 }: {
   cabinet: Cabinet;
   initialSettings: Setting[];
   initialChannelFilters: ChannelFilter[];
   initialCabinetBot: CabinetBot | null;
+  initialPublishGroups: PublishGroup[];
+  initialMirrorMessages: MirrorMessage[];
 }) {
   const [apiKey, setApiKey] = useState('');
   const [apiSecret, setApiSecret] = useState('');
@@ -72,6 +102,14 @@ export function CabinetDetail({
   const [settings, setSettings] = useState<Setting[]>(initialSettings);
   const [channelFilters, setChannelFilters] = useState<ChannelFilter[]>(initialChannelFilters);
   const [cabinetBot, setCabinetBot] = useState<CabinetBot | null>(initialCabinetBot);
+  const [publishGroups, setPublishGroups] = useState<PublishGroup[]>(initialPublishGroups);
+  const [mirrorMessages, setMirrorMessages] = useState<MirrorMessage[]>(initialMirrorMessages);
+  const [newPublishGroup, setNewPublishGroup] = useState({
+    title: '',
+    chatId: '',
+    publishEveryN: '1',
+    enabled: true,
+  });
   const [botToken, setBotToken] = useState('');
   const [botSignalChatId, setBotSignalChatId] = useState(initialCabinetBot?.signalChatId ?? '');
   const [botLogChatId, setBotLogChatId] = useState(initialCabinetBot?.logChatId ?? '');
@@ -186,6 +224,82 @@ export function CabinetDetail({
     }
     await refreshCabinetBot();
     setMsg('Cabinet bot успешно верифицирован.');
+  }
+
+  async function refetchPublishGroups() {
+    const [groupsRes, mirrorRes] = await Promise.all([
+      fetch(`/api/proxy/cabinets/${cabinet.id}/publish-groups`, { cache: 'no-store' }),
+      fetch(`/api/proxy/cabinets/${cabinet.id}/mirror-messages?limit=100`, { cache: 'no-store' }),
+    ]);
+    if (groupsRes.ok) setPublishGroups((await groupsRes.json()) as PublishGroup[]);
+    if (mirrorRes.ok) setMirrorMessages((await mirrorRes.json()) as MirrorMessage[]);
+  }
+
+  async function onCreatePublishGroup(e: React.FormEvent) {
+    e.preventDefault();
+    setMsg(null);
+    const publishEveryN = Number.parseInt(newPublishGroup.publishEveryN, 10);
+    if (!Number.isFinite(publishEveryN) || publishEveryN < 1 || publishEveryN > 100) {
+      setMsg('publishEveryN должен быть от 1 до 100.');
+      return;
+    }
+    const res = await fetch(`/api/proxy/cabinets/${cabinet.id}/publish-groups`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        title: newPublishGroup.title.trim(),
+        chatId: newPublishGroup.chatId.trim(),
+        publishEveryN,
+        enabled: newPublishGroup.enabled,
+      }),
+    });
+    if (!res.ok) {
+      setMsg(`Ошибка publish group: ${await res.text()}`);
+      return;
+    }
+    setNewPublishGroup({ title: '', chatId: '', publishEveryN: '1', enabled: true });
+    await refetchPublishGroups();
+    setMsg('Publish group добавлена.');
+  }
+
+  async function togglePublishGroup(group: PublishGroup) {
+    const res = await fetch(`/api/proxy/cabinets/${cabinet.id}/publish-groups/${group.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: !group.enabled }),
+    });
+    if (!res.ok) {
+      setMsg(`Ошибка publish group: ${await res.text()}`);
+      return;
+    }
+    await refetchPublishGroups();
+  }
+
+  async function updatePublishEveryN(group: PublishGroup, raw: string) {
+    const parsed = Number.parseInt(raw, 10);
+    if (!Number.isFinite(parsed) || parsed < 1 || parsed > 100 || parsed === group.publishEveryN) return;
+    const res = await fetch(`/api/proxy/cabinets/${cabinet.id}/publish-groups/${group.id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ publishEveryN: parsed }),
+    });
+    if (!res.ok) {
+      setMsg(`Ошибка publish group: ${await res.text()}`);
+      return;
+    }
+    await refetchPublishGroups();
+  }
+
+  async function removePublishGroup(group: PublishGroup) {
+    if (!confirm(`Удалить publish group ${group.title}?`)) return;
+    const res = await fetch(`/api/proxy/cabinets/${cabinet.id}/publish-groups/${group.id}`, {
+      method: 'DELETE',
+    });
+    if (!res.ok) {
+      setMsg(`Ошибка publish group: ${await res.text()}`);
+      return;
+    }
+    await refetchPublishGroups();
   }
 
   const getValue = (key: string) => settings.find((s) => s.key === key)?.value ?? '';
@@ -373,6 +487,129 @@ export function CabinetDetail({
                   <td>{filter.forcedLeverage ?? '—'}</td>
                   <td>{filter.defaultEntryUsd ?? '—'}</td>
                   <td>{filter.minLotBump == null ? '—' : filter.minLotBump ? 'yes' : 'no'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div className="card">
+        <h2>Publish groups (mirror targets)</h2>
+        <p style={{ color: 'var(--fg-dim)' }}>
+          Целевые Telegram-чаты для зеркалирования сигналов этого кабинета.
+        </p>
+        <form onSubmit={onCreatePublishGroup} className="row" style={{ marginBottom: 12 }}>
+          <input
+            placeholder="Название"
+            value={newPublishGroup.title}
+            onChange={(e) => setNewPublishGroup((p) => ({ ...p, title: e.target.value }))}
+            required
+          />
+          <input
+            placeholder="Chat ID (например -100123...)"
+            value={newPublishGroup.chatId}
+            onChange={(e) => setNewPublishGroup((p) => ({ ...p, chatId: e.target.value }))}
+            required
+          />
+          <input
+            style={{ width: 120 }}
+            type="number"
+            min={1}
+            max={100}
+            value={newPublishGroup.publishEveryN}
+            onChange={(e) => setNewPublishGroup((p) => ({ ...p, publishEveryN: e.target.value }))}
+          />
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <input
+              type="checkbox"
+              checked={newPublishGroup.enabled}
+              onChange={(e) => setNewPublishGroup((p) => ({ ...p, enabled: e.target.checked }))}
+            />
+            enabled
+          </label>
+          <button type="submit">+ Add</button>
+        </form>
+        {publishGroups.length === 0 ? (
+          <p style={{ color: 'var(--fg-dim)' }}>Publish groups не настроены.</p>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>Title</th>
+                <th>Chat ID</th>
+                <th>Enabled</th>
+                <th>Every N</th>
+                <th>Counter</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {publishGroups.map((group) => (
+                <tr key={group.id}>
+                  <td>{group.title}</td>
+                  <td>{group.chatId}</td>
+                  <td>
+                    <button className="ghost" onClick={() => void togglePublishGroup(group)}>
+                      {group.enabled ? 'on' : 'off'}
+                    </button>
+                  </td>
+                  <td>
+                    <input
+                      type="number"
+                      min={1}
+                      max={100}
+                      defaultValue={group.publishEveryN}
+                      onBlur={(e) => void updatePublishEveryN(group, e.target.value)}
+                    />
+                  </td>
+                  <td>{group.signalCounter}</td>
+                  <td>
+                    <button className="danger" onClick={() => void removePublishGroup(group)}>
+                      remove
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div className="card">
+        <h2>Mirror history</h2>
+        <div className="row" style={{ marginBottom: 8 }}>
+          <button className="ghost" onClick={() => void refetchPublishGroups()}>
+            Refresh
+          </button>
+        </div>
+        {mirrorMessages.length === 0 ? (
+          <p style={{ color: 'var(--fg-dim)' }}>Mirror messages отсутствуют.</p>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>At</th>
+                <th>Kind</th>
+                <th>Status</th>
+                <th>Source</th>
+                <th>Target</th>
+                <th>Error</th>
+              </tr>
+            </thead>
+            <tbody>
+              {mirrorMessages.map((row) => (
+                <tr key={row.id}>
+                  <td>{new Date(row.createdAt).toLocaleString()}</td>
+                  <td>{row.kind}</td>
+                  <td>{row.status}</td>
+                  <td>
+                    {row.sourceChatId} / {row.sourceMessageId}
+                  </td>
+                  <td>
+                    {row.targetChatId} / {row.targetMessageId ?? '—'}
+                  </td>
+                  <td>{row.error ?? '—'}</td>
                 </tr>
               ))}
             </tbody>

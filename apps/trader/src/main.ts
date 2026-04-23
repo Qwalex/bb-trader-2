@@ -40,7 +40,12 @@ async function main(): Promise<void> {
   });
   const orderService = new BybitOrderService(registry, prisma, logger);
   const positionService = new BybitPositionService(registry, prisma, logger);
-  const fanout = new SignalFanoutService({ prisma, orderService, logger });
+  const fanout = new SignalFanoutService({
+    prisma,
+    orderService,
+    logger,
+    encryptionKey: config.APP_ENCRYPTION_KEY,
+  });
 
   const executeSignalWorker = await queue.work({
     queue: QUEUE_NAMES.executeSignal,

@@ -15,6 +15,7 @@
  */
 
 import type { PrismaClient } from '@repo/shared-prisma';
+import { decryptSecret } from '@repo/shared-ts';
 import type { SignalDirection } from '@repo/shared-ts';
 import type { AppLogger } from './logger.js';
 import type { BybitOrderService } from './bybit/order-service.js';
@@ -23,6 +24,7 @@ export interface FanoutOptions {
   prisma: PrismaClient;
   orderService: BybitOrderService;
   logger: AppLogger;
+  encryptionKey: string;
 }
 
 export interface FanoutInput {
@@ -65,6 +67,11 @@ export class SignalFanoutService {
           include: { userbotChannel: true },
         },
         bybitKey: true,
+        telegramBot: true,
+        publishGroups: {
+          where: { enabled: true },
+          orderBy: { createdAt: 'asc' },
+        },
       },
     });
 
@@ -201,6 +208,27 @@ export class SignalFanoutService {
           }),
         ]);
 
+        await this.publishMirrorMessages({
+          cabinetId: cabinet.id,
+          userId: input.userId,
+          draftId: draft.id,
+          sourceChatId: draft.sourceChatId,
+          sourceMessageId: draft.sourceMessageId,
+          pair: draft.pair,
+          direction: draft.direction,
+          entries,
+          stopLoss: draft.stopLoss,
+          takeProfits,
+          publishGroups: (cabinet.publishGroups as Array<{
+            id: string;
+            chatId: string;
+            title: string;
+            publishEveryN: number;
+            signalCounter: number;
+          }>),
+          botTokenEncrypted: cabinet.telegramBot?.botTokenEncrypted ?? null,
+        });
+
         logger.info(
           { signalDraftId: draft.id, cabinetId: cabinet.id, signalId: signal.id },
           'trader.fanout.cabinet_executed',
@@ -287,6 +315,191 @@ export class SignalFanoutService {
       'trader.fanout.skipped',
     );
   }
+
+  private async publishMirrorMessages(input: {
+    cabinetId: string;
+    userId: string;
+    draftId: string;
+    sourceChatId: string;
+    sourceMessageId: string;
+    pair: string;
+    direction: string;
+    entries: number[];
+    stopLoss: number;
+    takeProfits: number[];
+    publishGroups: Array<{ id: string; chatId: string; title: string; publishEveryN: number; signalCounter: number }>;
+    botTokenEncrypted: string | null;
+  }): Promise<void> {
+    const { prisma, logger } = this.opts;
+    if (input.publishGroups.length === 0) return;
+    if (!input.botTokenEncrypted) {
+      for (const group of input.publishGroups) {
+        await prisma.tgUserbotMirrorMessage.upsert({
+          where: { publishGroupId_ingestId_kind: { publishGroupId: group.id, ingestId: input.draftId, kind: 'signal' } },
+          create: {
+            userId: input.userId,
+            publishGroupId: group.id,
+            ingestId: input.draftId,
+            sourceChatId: input.sourceChatId,
+            sourceMessageId: input.sourceMessageId,
+            kind: 'signal',
+            status: 'failed',
+            targetChatId: group.chatId,
+            error: 'cabinet bot is not configured',
+          },
+          update: {
+            status: 'failed',
+            error: 'cabinet bot is not configured',
+          },
+        });
+      }
+      return;
+    }
+    const token = decryptSecret({ encryptionKey: this.opts.encryptionKey }, input.botTokenEncrypted);
+    for (const group of input.publishGroups) {
+      const nextCounter = group.signalCounter + 1;
+      if (nextCounter % group.publishEveryN !== 0) {
+        await prisma.$transaction([
+          prisma.cabinetPublishGroup.update({
+            where: { id: group.id },
+            data: { signalCounter: nextCounter },
+          }),
+          prisma.tgUserbotMirrorMessage.upsert({
+            where: {
+              publishGroupId_ingestId_kind: {
+                publishGroupId: group.id,
+                ingestId: input.draftId,
+                kind: 'signal',
+              },
+            },
+            create: {
+              userId: input.userId,
+              publishGroupId: group.id,
+              ingestId: input.draftId,
+              sourceChatId: input.sourceChatId,
+              sourceMessageId: input.sourceMessageId,
+              kind: 'signal',
+              status: 'skipped_by_n',
+              targetChatId: group.chatId,
+              error: null,
+            },
+            update: {
+              status: 'skipped_by_n',
+              error: null,
+            },
+          }),
+        ]);
+        continue;
+      }
+      try {
+        const text = formatMirrorText(input);
+        const targetMessageId = await this.sendTelegramMessage(token, group.chatId, text);
+        await prisma.$transaction([
+          prisma.cabinetPublishGroup.update({
+            where: { id: group.id },
+            data: { signalCounter: nextCounter },
+          }),
+          prisma.tgUserbotMirrorMessage.upsert({
+            where: {
+              publishGroupId_ingestId_kind: {
+                publishGroupId: group.id,
+                ingestId: input.draftId,
+                kind: 'signal',
+              },
+            },
+            create: {
+              userId: input.userId,
+              publishGroupId: group.id,
+              ingestId: input.draftId,
+              sourceChatId: input.sourceChatId,
+              sourceMessageId: input.sourceMessageId,
+              kind: 'signal',
+              status: 'posted',
+              targetChatId: group.chatId,
+              targetMessageId,
+            },
+            update: {
+              status: 'posted',
+              targetChatId: group.chatId,
+              targetMessageId,
+              error: null,
+            },
+          }),
+        ]);
+      } catch (error) {
+        await prisma.$transaction([
+          prisma.cabinetPublishGroup.update({
+            where: { id: group.id },
+            data: { signalCounter: nextCounter },
+          }),
+          prisma.tgUserbotMirrorMessage.upsert({
+            where: {
+              publishGroupId_ingestId_kind: {
+                publishGroupId: group.id,
+                ingestId: input.draftId,
+                kind: 'signal',
+              },
+            },
+            create: {
+              userId: input.userId,
+              publishGroupId: group.id,
+              ingestId: input.draftId,
+              sourceChatId: input.sourceChatId,
+              sourceMessageId: input.sourceMessageId,
+              kind: 'signal',
+              status: 'failed',
+              targetChatId: group.chatId,
+              error: errorMessage(error).slice(0, 500),
+            },
+            update: {
+              status: 'failed',
+              error: errorMessage(error).slice(0, 500),
+            },
+          }),
+        ]);
+        logger.warn(
+          { cabinetId: input.cabinetId, publishGroupId: group.id, error: errorMessage(error) },
+          'trader.mirror.publish_failed',
+        );
+      }
+    }
+  }
+
+  private async sendTelegramMessage(token: string, chatId: string, text: string): Promise<string | null> {
+    const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: text.slice(0, 4000),
+        disable_web_page_preview: true,
+      }),
+    });
+    const json = (await response.json()) as {
+      ok?: boolean;
+      description?: string;
+      result?: { message_id?: number };
+    };
+    if (!response.ok || json.ok === false) {
+      throw new Error(`Telegram sendMessage failed: ${json.description ?? response.statusText}`);
+    }
+    return typeof json.result?.message_id === 'number' ? String(json.result.message_id) : null;
+  }
+}
+
+function formatMirrorText(input: {
+  pair: string;
+  direction: string;
+  entries: number[];
+  stopLoss: number;
+  takeProfits: number[];
+}): string {
+  return [
+    `Signal ${input.direction} ${input.pair}`,
+    `Entries: ${input.entries.join(', ')}`,
+    `SL: ${input.stopLoss}`,
+    `TP: ${input.takeProfits.join(', ')}`,
+  ].join('\n');
 }
 
 function parseNumericSetting(value: string | undefined, fallback: string | null): number {

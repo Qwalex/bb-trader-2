@@ -3,6 +3,8 @@ import {
   Body,
   Controller,
   Get,
+  NotFoundException,
+  Param,
   Patch,
   Post,
   Query,
@@ -66,6 +68,19 @@ export class AdminController {
     const parsed = RunDiagnosticsBody.safeParse(body);
     if (!parsed.success) throw new BadRequestException(parsed.error.issues);
     return this.admin.runDiagnostics(req.authUserId ?? null, parsed.data.models, parsed.data.caseIds);
+  }
+
+  @Get('diagnostics/runs')
+  listDiagnosticRuns(@Query('limit') limit = '30') {
+    const parsed = Number(limit);
+    return this.admin.listDiagnosticRuns(Number.isFinite(parsed) ? parsed : 30);
+  }
+
+  @Get('diagnostics/runs/:runId')
+  async getDiagnosticRunDetail(@Param('runId') runId: string) {
+    const detail = await this.admin.getDiagnosticRunDetail(runId);
+    if (!detail) throw new NotFoundException('diagnostic run not found');
+    return detail;
   }
 
   @Post('recalc-closed-pnl/run')

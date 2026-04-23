@@ -71,6 +71,83 @@ export class AdminService {
     return { runId: run.id };
   }
 
+  async listDiagnosticRuns(limit = 30) {
+    const rows = await this.prisma.diagnosticRun.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: Math.min(Math.max(limit, 1), 200),
+      select: {
+        id: true,
+        status: true,
+        caseCount: true,
+        summary: true,
+        error: true,
+        startedAt: true,
+        finishedAt: true,
+        createdAt: true,
+      },
+    });
+    return rows.map((row) => ({
+      ...row,
+      startedAt: row.startedAt.toISOString(),
+      finishedAt: row.finishedAt?.toISOString() ?? null,
+      createdAt: row.createdAt.toISOString(),
+    }));
+  }
+
+  async getDiagnosticRunDetail(runId: string) {
+    const run = await this.prisma.diagnosticRun.findUnique({
+      where: { id: runId },
+      include: {
+        cases: {
+          orderBy: { createdAt: 'asc' },
+          take: 500,
+        },
+        modelResults: {
+          orderBy: { createdAt: 'asc' },
+          take: 2000,
+        },
+        stepResults: {
+          orderBy: { createdAt: 'asc' },
+          take: 4000,
+        },
+        logs: {
+          orderBy: { createdAt: 'asc' },
+          take: 2000,
+        },
+      },
+    });
+    if (!run) return null;
+    return {
+      id: run.id,
+      status: run.status,
+      caseCount: run.caseCount,
+      summary: run.summary,
+      error: run.error,
+      startedAt: run.startedAt.toISOString(),
+      finishedAt: run.finishedAt?.toISOString() ?? null,
+      createdAt: run.createdAt.toISOString(),
+      cases: run.cases.map((row) => ({
+        ...row,
+        createdAt: row.createdAt.toISOString(),
+        updatedAt: row.updatedAt.toISOString(),
+      })),
+      modelResults: run.modelResults.map((row) => ({
+        ...row,
+        createdAt: row.createdAt.toISOString(),
+        updatedAt: row.updatedAt.toISOString(),
+      })),
+      stepResults: run.stepResults.map((row) => ({
+        ...row,
+        createdAt: row.createdAt.toISOString(),
+        updatedAt: row.updatedAt.toISOString(),
+      })),
+      logs: run.logs.map((row) => ({
+        ...row,
+        createdAt: row.createdAt.toISOString(),
+      })),
+    };
+  }
+
   async runRecalcClosedPnl(
     cabinetId: string | null,
     dryRun: boolean,

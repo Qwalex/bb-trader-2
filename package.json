@@ -22,6 +22,7 @@
     "db:migrate:deploy": "pnpm --filter @repo/shared-prisma db:migrate:deploy",
     "db:studio": "pnpm --filter @repo/shared-prisma db:studio",
     "db:validate": "pnpm --filter @repo/shared-prisma db:validate",
+    "check:crypto-contract": "pnpm --filter @repo/shared-ts build && node scripts/check-crypto-contract.mjs",
     "docker:dev:up": "docker compose -f docker-compose.dev.yml up -d",
     "docker:dev:down": "docker compose -f docker-compose.dev.yml down",
     "docker:dev:logs": "docker compose -f docker-compose.dev.yml logs -f"

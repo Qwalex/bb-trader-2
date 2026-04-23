@@ -16,6 +16,9 @@ interface AppLog {
 }
 
 interface PipelineSummary {
+  ingestCounts?: Array<{ status: string; _count: { _all: number } }>;
+  commandCounts?: Array<{ status: string; _count: { _all: number } }>;
+  recalcCounts?: Array<{ status: string; _count: { _all: number } }>;
   stuck: {
     ingestClassifying: number;
     userbotCommands: number;
@@ -43,6 +46,8 @@ export function AdminPanel({
   const [logs, setLogs] = useState(initialLogs);
   const [pipeline, setPipeline] = useState(initialPipeline);
   const [msg, setMsg] = useState<string | null>(null);
+  const [logLevel, setLogLevel] = useState('');
+  const [logCategory, setLogCategory] = useState('');
 
   async function saveSetting(key: string, value: string) {
     const res = await fetch('/api/proxy/admin/global-settings', {
@@ -76,7 +81,10 @@ export function AdminPanel({
   }
 
   async function refreshLogs() {
-    const res = await fetch('/api/proxy/admin/logs?limit=200', { cache: 'no-store' });
+    const params = new URLSearchParams({ limit: '200' });
+    if (logLevel) params.set('level', logLevel);
+    if (logCategory) params.set('category', logCategory);
+    const res = await fetch(`/api/proxy/admin/logs?${params.toString()}`, { cache: 'no-store' });
     if (!res.ok) return;
     setLogs(await res.json());
   }
@@ -145,10 +153,46 @@ export function AdminPanel({
             Refresh
           </button>
         </div>
+        <div className="row" style={{ marginTop: 8 }}>
+          <span>Ingest counts:</span>
+          {(pipeline.ingestCounts ?? []).map((row) => (
+            <span key={`ingest-${row.status}`}>
+              {row.status}={row._count._all}
+            </span>
+          ))}
+        </div>
+        <div className="row" style={{ marginTop: 8 }}>
+          <span>Command counts:</span>
+          {(pipeline.commandCounts ?? []).map((row) => (
+            <span key={`command-${row.status}`}>
+              {row.status}={row._count._all}
+            </span>
+          ))}
+        </div>
+        <div className="row" style={{ marginTop: 8 }}>
+          <span>Recalc counts:</span>
+          {(pipeline.recalcCounts ?? []).map((row) => (
+            <span key={`recalc-${row.status}`}>
+              {row.status}={row._count._all}
+            </span>
+          ))}
+        </div>
       </div>
       <div className="card">
         <h2>App logs</h2>
         <div className="row" style={{ marginBottom: 12 }}>
+          <select value={logLevel} onChange={(e) => setLogLevel(e.target.value)}>
+            <option value="">all levels</option>
+            <option value="debug">debug</option>
+            <option value="info">info</option>
+            <option value="warn">warn</option>
+            <option value="error">error</option>
+          </select>
+          <input
+            placeholder="category (userbot/classifier/...)"
+            value={logCategory}
+            onChange={(e) => setLogCategory(e.target.value)}
+          />
           <button className="ghost" onClick={() => void refreshLogs()}>
             Refresh
           </button>

@@ -32,10 +32,12 @@ export interface IngestWorkerOptions {
   logger: AppLogger;
   pollIntervalMs: number;
   batchSize: number;
+  fallbackModel?: string;
 }
 
 export class IngestWorker {
   private stopped = false;
+  private lastCreditsSyncAt = 0;
 
   constructor(private readonly opts: IngestWorkerOptions) {}
 
@@ -80,6 +82,7 @@ export class IngestWorker {
       await this.processOne(row);
     }
     await this.resolvePendingOpenrouterCosts();
+    await this.syncOpenrouterCredits();
 
     return claimed.length;
   }
@@ -136,7 +139,9 @@ export class IngestWorker {
     }
 
     try {
-      const extracted = await extractSignal(openrouter, this.buildExtractorInput(text, row.rawJson));
+      const extracted = await extractSignal(openrouter, this.buildExtractorInput(text, row.rawJson), {
+        fallbackModel: this.opts.fallbackModel,
+      });
       const generationId =
         extracted.kind === 'signal' ? extracted.data.generationId : extracted.generationId;
       await this.recordOpenrouterCost({
@@ -460,6 +465,42 @@ export class IngestWorker {
           'classifier.openrouter.cost_retry_failed',
         );
       }
+    }
+  }
+
+  private async syncOpenrouterCredits(): Promise<void> {
+    const { prisma, openrouter, logger } = this.opts;
+    if (Date.now() - this.lastCreditsSyncAt < 5 * 60_000) return;
+    this.lastCreditsSyncAt = Date.now();
+    try {
+      const credits = await openrouter.fetchCredits();
+      await prisma.$transaction([
+        prisma.globalSetting.upsert({
+          where: { key: 'OPENROUTER_TOTAL_CREDITS' },
+          create: { key: 'OPENROUTER_TOTAL_CREDITS', value: String(credits.totalCredits ?? '') },
+          update: { value: String(credits.totalCredits ?? '') },
+        }),
+        prisma.globalSetting.upsert({
+          where: { key: 'OPENROUTER_TOTAL_USAGE' },
+          create: { key: 'OPENROUTER_TOTAL_USAGE', value: String(credits.totalUsage ?? '') },
+          update: { value: String(credits.totalUsage ?? '') },
+        }),
+        prisma.globalSetting.upsert({
+          where: { key: 'OPENROUTER_REMAINING_CREDITS' },
+          create: {
+            key: 'OPENROUTER_REMAINING_CREDITS',
+            value: String(credits.remainingCredits ?? ''),
+          },
+          update: { value: String(credits.remainingCredits ?? '') },
+        }),
+        prisma.globalSetting.upsert({
+          where: { key: 'OPENROUTER_CREDITS_SYNCED_AT' },
+          create: { key: 'OPENROUTER_CREDITS_SYNCED_AT', value: new Date().toISOString() },
+          update: { value: new Date().toISOString() },
+        }),
+      ]);
+    } catch (error) {
+      logger.warn({ error: errorMessage(error) }, 'classifier.openrouter.credits_sync_failed');
     }
   }
 }

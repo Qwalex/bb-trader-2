@@ -117,6 +117,42 @@ export class OpenRouterClient {
     const parsed = typeof raw === 'number' ? raw : Number(raw);
     return Number.isFinite(parsed) ? parsed : null;
   }
+
+  async fetchCredits(): Promise<{
+    totalCredits: number | null;
+    totalUsage: number | null;
+    remainingCredits: number | null;
+    raw: unknown;
+  }> {
+    const response = await fetch('https://openrouter.ai/api/v1/credits', {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${this.opts.apiKey}`,
+      },
+    });
+    if (!response.ok) {
+      const text = await safeText(response);
+      throw new Error(`OpenRouter credits ${response.status}: ${text.slice(0, 500)}`);
+    }
+    const json = (await response.json()) as {
+      data?: { total_credits?: number | string | null; total_usage?: number | string | null };
+      total_credits?: number | string | null;
+      total_usage?: number | string | null;
+    };
+    const creditsRaw = json.data?.total_credits ?? json.total_credits ?? null;
+    const usageRaw = json.data?.total_usage ?? json.total_usage ?? null;
+    const totalCredits = creditsRaw == null ? null : Number(creditsRaw);
+    const totalUsage = usageRaw == null ? null : Number(usageRaw);
+    const safeCredits = Number.isFinite(totalCredits) ? totalCredits : null;
+    const safeUsage = Number.isFinite(totalUsage) ? totalUsage : null;
+    return {
+      totalCredits: safeCredits,
+      totalUsage: safeUsage,
+      remainingCredits:
+        safeCredits != null && safeUsage != null ? Math.max(safeCredits - safeUsage, 0) : null,
+      raw: json,
+    };
+  }
 }
 
 async function safeText(response: Response): Promise<string> {

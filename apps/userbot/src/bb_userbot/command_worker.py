@@ -85,11 +85,9 @@ class CommandWorker:
                 raw_password = payload.get("passwordEncrypted")
                 if not isinstance(raw_password, str):
                     raise RuntimeError("passwordEncrypted is required")
-                password = (
-                    decrypt_secret(self._encryption_key, raw_password)
-                    if is_encrypted_payload(raw_password)
-                    else raw_password
-                )
+                if not is_encrypted_payload(raw_password):
+                    raise RuntimeError("passwordEncrypted must be encrypted (v1 payload)")
+                password = decrypt_secret(self._encryption_key, raw_password)
                 await self._sessions.submit_2fa_password(user_id, password)
                 await db.finish_command(self._pool, command_id, ok=True, result={})
             elif cmd_type == "logout":

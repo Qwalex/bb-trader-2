@@ -38,6 +38,7 @@ async function main(): Promise<void> {
     logger,
     pollIntervalMs: config.CLASSIFIER_POLL_INTERVAL_MS,
     batchSize: config.CLASSIFIER_BATCH_SIZE,
+    fallbackModel: config.OPENROUTER_FALLBACK_MODEL,
   });
 
   const diagnosticsWorker = await queue.work({

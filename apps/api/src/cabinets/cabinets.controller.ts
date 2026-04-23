@@ -9,14 +9,17 @@ import {
   Patch,
   Post,
   Put,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
 import {
   CreateCabinetDto,
+  CreateCabinetPublishGroupDto,
   UpdateCabinetChannelFilterDto,
   UpsertCabinetTelegramBotDto,
   UpdateCabinetDto,
+  UpdateCabinetPublishGroupDto,
   UpdateSettingsDto,
   VerifyCabinetTelegramBotDto,
   UpsertBybitKeyDto,
@@ -136,5 +139,54 @@ export class CabinetsController {
     const parsed = VerifyCabinetTelegramBotDto.safeParse(body);
     if (!parsed.success) throw new BadRequestException(parsed.error.issues);
     return this.cabinets.verifyCabinetTelegramBot(req.authUserId!, id, parsed.data);
+  }
+
+  @Get(':id/publish-groups')
+  listPublishGroups(@Req() req: RequestWithUser, @Param('id') id: string) {
+    return this.cabinets.listPublishGroups(req.authUserId!, id);
+  }
+
+  @Post(':id/publish-groups')
+  async createPublishGroup(
+    @Req() req: RequestWithUser,
+    @Param('id') id: string,
+    @Body() body: unknown,
+  ) {
+    const parsed = CreateCabinetPublishGroupDto.safeParse(body);
+    if (!parsed.success) throw new BadRequestException(parsed.error.issues);
+    return this.cabinets.createPublishGroup(req.authUserId!, id, parsed.data);
+  }
+
+  @Patch(':id/publish-groups/:publishGroupId')
+  async updatePublishGroup(
+    @Req() req: RequestWithUser,
+    @Param('id') id: string,
+    @Param('publishGroupId') publishGroupId: string,
+    @Body() body: unknown,
+  ) {
+    const parsed = UpdateCabinetPublishGroupDto.safeParse(body);
+    if (!parsed.success) throw new BadRequestException(parsed.error.issues);
+    await this.cabinets.updatePublishGroup(req.authUserId!, id, publishGroupId, parsed.data);
+    return { ok: true };
+  }
+
+  @Delete(':id/publish-groups/:publishGroupId')
+  async deletePublishGroup(
+    @Req() req: RequestWithUser,
+    @Param('id') id: string,
+    @Param('publishGroupId') publishGroupId: string,
+  ) {
+    await this.cabinets.deletePublishGroup(req.authUserId!, id, publishGroupId);
+    return { ok: true };
+  }
+
+  @Get(':id/mirror-messages')
+  listMirrorMessages(
+    @Req() req: RequestWithUser,
+    @Param('id') id: string,
+    @Query('limit') limit?: string,
+  ) {
+    const parsed = limit ? Number.parseInt(limit, 10) : undefined;
+    return this.cabinets.listMirrorMessages(req.authUserId!, id, parsed);
   }
 }

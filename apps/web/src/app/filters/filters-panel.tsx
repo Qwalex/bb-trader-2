@@ -1,6 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import { CLASSIFICATIONS } from '@repo/shared-ts';
 
 type FilterKind = 'signal' | 'close' | 'result' | 'reentry' | 'ignore';
 
@@ -26,7 +27,7 @@ interface FilterExample {
   updatedAt: string;
 }
 
-const KINDS: FilterKind[] = ['signal', 'close', 'result', 'reentry', 'ignore'];
+const KINDS = CLASSIFICATIONS as readonly FilterKind[];
 
 export function FiltersPanel({
   initialGroups,

@@ -4,6 +4,7 @@ const Env = z.object({
   DATABASE_URL: z.string().min(1),
   OPENROUTER_API_KEY: z.string().min(1),
   OPENROUTER_MODEL: z.string().default('openai/gpt-4o-mini'),
+  OPENROUTER_FALLBACK_MODEL: z.string().optional(),
   OPENROUTER_HTTP_TIMEOUT_MS: z.coerce.number().int().positive().default(180_000),
   CLASSIFIER_POLL_INTERVAL_MS: z.coerce.number().int().positive().default(500),
   CLASSIFIER_BATCH_SIZE: z.coerce.number().int().positive().default(10),

@@ -3,12 +3,16 @@ import { BadRequestException, Inject, Injectable, NotFoundException } from '@nes
 import type { PrismaClient } from '@repo/shared-prisma';
 import { getQueueClient } from '@repo/shared-queue';
 import {
+  type CabinetMirrorMessageDto,
+  type CabinetPublishGroupDto,
   type CabinetChannelFilterDto,
   type CabinetTelegramBotDto,
+  type CreateCabinetPublishGroupDto,
   PollCabinetPositionsPayload,
   QUEUE_NAMES,
   type UpsertCabinetTelegramBotDto,
   type UpdateCabinetChannelFilterDto,
+  type UpdateCabinetPublishGroupDto,
   type VerifyCabinetTelegramBotDto,
   encryptSecret,
   decryptSecret,
@@ -20,6 +24,7 @@ import {
 import { APP_CONFIG } from '../config.module.js';
 import type { AppConfig } from '../config.js';
 import { PRISMA } from '../prisma.module.js';
+import { telegramApiCall } from '../telegram/telegram-api.js';
 
 @Injectable()
 export class CabinetsService {
@@ -333,6 +338,109 @@ export class CabinetsService {
     }
   }
 
+  async listPublishGroups(userId: string, cabinetId: string): Promise<CabinetPublishGroupDto[]> {
+    await this.assertOwned(userId, cabinetId);
+    const rows = await this.prisma.cabinetPublishGroup.findMany({
+      where: { cabinetId },
+      orderBy: [{ enabled: 'desc' }, { createdAt: 'asc' }],
+    });
+    return rows.map((row) => ({
+      id: row.id,
+      cabinetId: row.cabinetId,
+      title: row.title,
+      chatId: row.chatId,
+      enabled: row.enabled,
+      publishEveryN: row.publishEveryN,
+      signalCounter: row.signalCounter,
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
+    }));
+  }
+
+  async createPublishGroup(
+    userId: string,
+    cabinetId: string,
+    dto: CreateCabinetPublishGroupDto,
+  ): Promise<CabinetPublishGroupDto> {
+    await this.assertOwned(userId, cabinetId);
+    const row = await this.prisma.cabinetPublishGroup.create({
+      data: {
+        cabinetId,
+        title: dto.title,
+        chatId: dto.chatId,
+        enabled: dto.enabled,
+        publishEveryN: dto.publishEveryN,
+      },
+    });
+    return {
+      id: row.id,
+      cabinetId: row.cabinetId,
+      title: row.title,
+      chatId: row.chatId,
+      enabled: row.enabled,
+      publishEveryN: row.publishEveryN,
+      signalCounter: row.signalCounter,
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
+    };
+  }
+
+  async updatePublishGroup(
+    userId: string,
+    cabinetId: string,
+    publishGroupId: string,
+    dto: UpdateCabinetPublishGroupDto,
+  ): Promise<void> {
+    await this.assertOwned(userId, cabinetId);
+    const existing = await this.prisma.cabinetPublishGroup.findFirst({
+      where: { id: publishGroupId, cabinetId },
+      select: { id: true },
+    });
+    if (!existing) throw new NotFoundException('Publish group not found');
+    await this.prisma.cabinetPublishGroup.update({
+      where: { id: publishGroupId },
+      data: dto,
+    });
+  }
+
+  async deletePublishGroup(userId: string, cabinetId: string, publishGroupId: string): Promise<void> {
+    await this.assertOwned(userId, cabinetId);
+    const existing = await this.prisma.cabinetPublishGroup.findFirst({
+      where: { id: publishGroupId, cabinetId },
+      select: { id: true },
+    });
+    if (!existing) throw new NotFoundException('Publish group not found');
+    await this.prisma.cabinetPublishGroup.delete({
+      where: { id: publishGroupId },
+    });
+  }
+
+  async listMirrorMessages(
+    userId: string,
+    cabinetId: string,
+    limit = 100,
+  ): Promise<CabinetMirrorMessageDto[]> {
+    await this.assertOwned(userId, cabinetId);
+    const rows = await this.prisma.tgUserbotMirrorMessage.findMany({
+      where: { userId, publishGroup: { cabinetId } },
+      orderBy: { createdAt: 'desc' },
+      take: Math.min(Math.max(limit, 1), 300),
+    });
+    return rows.map((row) => ({
+      id: row.id,
+      publishGroupId: row.publishGroupId,
+      ingestId: row.ingestId,
+      sourceChatId: row.sourceChatId,
+      sourceMessageId: row.sourceMessageId,
+      kind: row.kind,
+      status: row.status,
+      targetChatId: row.targetChatId,
+      targetMessageId: row.targetMessageId,
+      error: row.error,
+      createdAt: row.createdAt.toISOString(),
+    }));
+  }
+
   private async assertOwned(userId: string, cabinetId: string): Promise<void> {
     const owned = await this.prisma.cabinet.findFirst({
       where: { id: cabinetId, ownerUserId: userId },
@@ -346,15 +454,6 @@ export class CabinetsService {
     method: string,
     payload: Record<string, unknown>,
   ): Promise<T> {
-    const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const json = (await response.json()) as { ok?: boolean; description?: string } & T;
-    if (!response.ok || json.ok === false) {
-      throw new Error(`Telegram ${method} failed: ${json.description ?? response.statusText}`);
-    }
-    return json;
+    return telegramApiCall<T>(token, method, payload);
   }
 }

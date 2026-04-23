@@ -67,3 +67,45 @@ export const VerifyCabinetTelegramBotDto = z.object({
   verifyLogChatId: z.boolean().default(true),
 });
 export type VerifyCabinetTelegramBotDto = z.infer<typeof VerifyCabinetTelegramBotDto>;
+
+export const CabinetPublishGroupDto = z.object({
+  id: z.string(),
+  cabinetId: z.string(),
+  title: z.string(),
+  chatId: z.string(),
+  enabled: z.boolean(),
+  publishEveryN: z.number().int().positive(),
+  signalCounter: z.number().int().nonnegative(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type CabinetPublishGroupDto = z.infer<typeof CabinetPublishGroupDto>;
+
+export const CreateCabinetPublishGroupDto = z.object({
+  title: z.string().trim().min(1).max(200),
+  chatId: z.string().trim().min(1).max(120),
+  enabled: z.boolean().default(true),
+  publishEveryN: z.number().int().min(1).max(100).default(1),
+});
+export type CreateCabinetPublishGroupDto = z.infer<typeof CreateCabinetPublishGroupDto>;
+
+export const UpdateCabinetPublishGroupDto = CreateCabinetPublishGroupDto.partial().refine(
+  (v) => Object.values(v).some((x) => x !== undefined),
+  { message: 'nothing to update' },
+);
+export type UpdateCabinetPublishGroupDto = z.infer<typeof UpdateCabinetPublishGroupDto>;
+
+export const CabinetMirrorMessageDto = z.object({
+  id: z.string(),
+  publishGroupId: z.string(),
+  ingestId: z.string(),
+  sourceChatId: z.string(),
+  sourceMessageId: z.string(),
+  kind: z.string(),
+  status: z.string(),
+  targetChatId: z.string(),
+  targetMessageId: z.string().nullable(),
+  error: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type CabinetMirrorMessageDto = z.infer<typeof CabinetMirrorMessageDto>;

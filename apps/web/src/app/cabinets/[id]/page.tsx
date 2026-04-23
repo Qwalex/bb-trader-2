@@ -50,6 +50,32 @@ interface CabinetBot {
   lastOutboundAt: string | null;
 }
 
+interface PublishGroup {
+  id: string;
+  cabinetId: string;
+  title: string;
+  chatId: string;
+  enabled: boolean;
+  publishEveryN: number;
+  signalCounter: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface MirrorMessage {
+  id: string;
+  publishGroupId: string;
+  ingestId: string;
+  sourceChatId: string;
+  sourceMessageId: string;
+  kind: string;
+  status: string;
+  targetChatId: string;
+  targetMessageId: string | null;
+  error: string | null;
+  createdAt: string;
+}
+
 export default async function CabinetPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   try {
@@ -69,10 +95,12 @@ export default async function CabinetPage({ params }: { params: Promise<{ id: st
   }
   if (!cabinet) notFound();
 
-  const [settings, channelFilters, cabinetBot] = await Promise.all([
+  const [settings, channelFilters, cabinetBot, publishGroups, mirrorMessages] = await Promise.all([
     apiFetch<Setting[]>(`/cabinets/${id}/settings`),
     apiFetch<ChannelFilter[]>(`/cabinets/${id}/channel-filters`),
     apiFetch<CabinetBot | null>(`/cabinets/${id}/cabinet-bot`),
+    apiFetch<PublishGroup[]>(`/cabinets/${id}/publish-groups`),
+    apiFetch<MirrorMessage[]>(`/cabinets/${id}/mirror-messages?limit=100`),
   ]);
 
   return (
@@ -88,6 +116,8 @@ export default async function CabinetPage({ params }: { params: Promise<{ id: st
           initialSettings={settings}
           initialChannelFilters={channelFilters}
           initialCabinetBot={cabinetBot}
+          initialPublishGroups={publishGroups}
+          initialMirrorMessages={mirrorMessages}
         />
       </div>
     </>
