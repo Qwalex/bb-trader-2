@@ -49,10 +49,14 @@ interface RecentEvent {
   chatTitle: string | null;
   messageId: string;
   text: string | null;
+  sourceType: string;
   status: string;
   classification: string | null;
+  classifyError: string | null;
   createdAt: string;
   draftStatus: string | null;
+  aiRequest: string | null;
+  aiResponse: string | null;
 }
 
 interface ActiveCabinetFilter {

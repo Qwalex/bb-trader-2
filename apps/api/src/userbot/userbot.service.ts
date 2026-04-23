@@ -14,6 +14,7 @@ import type {
   UserbotChannelDto,
   UserbotDashboardSummaryDto,
   UserbotRecentEventDto,
+  UserbotTraceDto,
   UserbotSessionDto,
 } from '@repo/shared-ts';
 import { encryptSecret } from '@repo/shared-ts';
@@ -176,11 +177,13 @@ export class UserbotService {
         chatId: true,
         messageId: true,
         text: true,
+        sourceType: true,
         status: true,
         classification: true,
+        classifyError: true,
         createdAt: true,
         signalDrafts: {
-          select: { status: true },
+          select: { status: true, aiRequest: true, aiResponse: true },
           orderBy: { createdAt: 'desc' },
           take: 1,
         },
@@ -204,11 +207,254 @@ export class UserbotService {
       chatTitle: titleByChatId.get(event.chatId) ?? null,
       messageId: event.messageId,
       text: event.text,
+      sourceType: event.sourceType,
       status: event.status,
       classification: event.classification,
+      classifyError: event.classifyError,
       createdAt: event.createdAt.toISOString(),
       draftStatus: event.signalDrafts[0]?.status ?? null,
+      aiRequest: event.signalDrafts[0]?.aiRequest ?? null,
+      aiResponse: event.signalDrafts[0]?.aiResponse ?? null,
     }));
+  }
+
+  async getTrace(userId: string, ingestId: string): Promise<UserbotTraceDto | null> {
+    const row = await this.prisma.ingestEvent.findFirst({
+      where: { id: ingestId, userId, sourceType: 'userbot' },
+      select: {
+        id: true,
+        chatId: true,
+        messageId: true,
+        status: true,
+        classification: true,
+        classifyError: true,
+        createdAt: true,
+        signalDrafts: {
+          select: { aiRequest: true, aiResponse: true },
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+        },
+      },
+    });
+    if (!row) return null;
+    return {
+      ingestId: row.id,
+      chatId: row.chatId,
+      messageId: row.messageId,
+      classification: row.classification,
+      status: row.status,
+      classifyError: row.classifyError,
+      aiRequest: row.signalDrafts[0]?.aiRequest ?? null,
+      aiResponse: row.signalDrafts[0]?.aiResponse ?? null,
+      createdAt: row.createdAt.toISOString(),
+    };
+  }
+
+  async reread(userId: string, ingestId: string): Promise<{ ok: true }> {
+    const row = await this.prisma.ingestEvent.findFirst({
+      where: { id: ingestId, userId, sourceType: 'userbot' },
+      select: { id: true },
+    });
+    if (!row) throw new Error('ingest not found');
+    await this.prisma.$transaction([
+      this.prisma.signalDraft.deleteMany({ where: { ingestEventId: ingestId } }),
+      this.prisma.ingestEvent.update({
+        where: { id: ingestId },
+        data: {
+          status: 'pending_classify',
+          classification: null,
+          classifyError: null,
+          classifiedAt: null,
+        },
+      }),
+    ]);
+    return { ok: true };
+  }
+
+  async rereadAll(userId: string, limit: number): Promise<{
+    total: number;
+    processed: number;
+  }> {
+    const rows = await this.prisma.ingestEvent.findMany({
+      where: {
+        userId,
+        sourceType: 'userbot',
+        status: { in: ['classified', 'ignored', 'failed'] },
+      },
+      select: { id: true },
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+    });
+    if (rows.length === 0) return { total: 0, processed: 0 };
+    const ids = rows.map((r) => r.id);
+    await this.prisma.$transaction([
+      this.prisma.signalDraft.deleteMany({ where: { ingestEventId: { in: ids } } }),
+      this.prisma.ingestEvent.updateMany({
+        where: { id: { in: ids } },
+        data: {
+          status: 'pending_classify',
+          classification: null,
+          classifyError: null,
+          classifiedAt: null,
+        },
+      }),
+    ]);
+    return { total: rows.length, processed: rows.length };
+  }
+
+  async scanToday(userId: string, limitPerChat: number): Promise<{
+    total: number;
+    processed: number;
+  }> {
+    const dayStart = new Date();
+    dayStart.setHours(0, 0, 0, 0);
+    const rows = await this.prisma.ingestEvent.findMany({
+      where: {
+        userId,
+        sourceType: 'userbot',
+        createdAt: { gte: dayStart },
+        status: { in: ['classified', 'ignored', 'failed'] },
+      },
+      select: { id: true, chatId: true },
+      orderBy: { createdAt: 'desc' },
+      take: 10_000,
+    });
+    const perChatCounter = new Map<string, number>();
+    const selected: string[] = [];
+    for (const row of rows) {
+      const current = perChatCounter.get(row.chatId) ?? 0;
+      if (current >= limitPerChat) continue;
+      perChatCounter.set(row.chatId, current + 1);
+      selected.push(row.id);
+    }
+    if (selected.length === 0) return { total: rows.length, processed: 0 };
+    await this.prisma.$transaction([
+      this.prisma.signalDraft.deleteMany({ where: { ingestEventId: { in: selected } } }),
+      this.prisma.ingestEvent.updateMany({
+        where: { id: { in: selected } },
+        data: {
+          status: 'pending_classify',
+          classification: null,
+          classifyError: null,
+          classifiedAt: null,
+        },
+      }),
+    ]);
+    return { total: rows.length, processed: selected.length };
+  }
+
+  async getOpenrouterSpend(userId: string, days: number): Promise<{
+    days: number;
+    totalUsd: number;
+    generations: number;
+    bySource: Array<{ chatId: string | null; title: string | null; source: string | null; usd: number; generations: number }>;
+    timeline: Array<{ date: string; usd: number; generations: number }>;
+  }> {
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    const rows = await this.prisma.openrouterGenerationCost.findMany({
+      where: {
+        userId,
+        createdAt: { gte: since },
+        status: 'resolved',
+      },
+      select: {
+        chatId: true,
+        source: true,
+        costUsd: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 10_000,
+    });
+    const chatIds = Array.from(new Set(rows.map((r) => r.chatId).filter((v): v is string => Boolean(v))));
+    const channels = chatIds.length
+      ? await this.prisma.userbotChannel.findMany({
+          where: { userId, chatId: { in: chatIds } },
+          select: { chatId: true, title: true },
+        })
+      : [];
+    const titleByChatId = new Map(channels.map((c) => [c.chatId, c.title]));
+
+    const bySourceMap = new Map<string, { chatId: string | null; source: string | null; usd: number; generations: number }>();
+    const timelineMap = new Map<string, { usd: number; generations: number }>();
+    let totalUsd = 0;
+    for (const row of rows) {
+      const usd = row.costUsd ?? 0;
+      totalUsd += usd;
+      const sourceKey = `${row.chatId ?? 'none'}:${row.source ?? 'none'}`;
+      const sourceAgg = bySourceMap.get(sourceKey) ?? {
+        chatId: row.chatId,
+        source: row.source,
+        usd: 0,
+        generations: 0,
+      };
+      sourceAgg.usd += usd;
+      sourceAgg.generations += 1;
+      bySourceMap.set(sourceKey, sourceAgg);
+
+      const day = row.createdAt.toISOString().slice(0, 10);
+      const dayAgg = timelineMap.get(day) ?? { usd: 0, generations: 0 };
+      dayAgg.usd += usd;
+      dayAgg.generations += 1;
+      timelineMap.set(day, dayAgg);
+    }
+    return {
+      days,
+      totalUsd,
+      generations: rows.length,
+      bySource: Array.from(bySourceMap.values())
+        .map((row) => ({
+          ...row,
+          title: row.chatId ? titleByChatId.get(row.chatId) ?? null : null,
+        }))
+        .sort((a, b) => b.usd - a.usd),
+      timeline: Array.from(timelineMap.entries())
+        .map(([date, agg]) => ({ date, usd: agg.usd, generations: agg.generations }))
+        .sort((a, b) => a.date.localeCompare(b.date)),
+    };
+  }
+
+  async getOpenrouterBalance(): Promise<{
+    totalCredits: number | null;
+    totalUsage: number | null;
+    remainingCredits: number | null;
+    raw: unknown;
+  }> {
+    const setting = await this.prisma.globalSetting.findUnique({
+      where: { key: 'OPENROUTER_API_KEY' },
+      select: { value: true },
+    });
+    const apiKey = setting?.value || this.config.OPENROUTER_API_KEY;
+    if (!apiKey) {
+      throw new BadRequestException('OpenRouter API key is not set (OPENROUTER_API_KEY)');
+    }
+    const response = await fetch('https://openrouter.ai/api/v1/credits', {
+      headers: { Authorization: `Bearer ${apiKey}` },
+    });
+    if (!response.ok) {
+      throw new BadRequestException(`OpenRouter credits failed with ${response.status}`);
+    }
+    const json = (await response.json()) as {
+      data?: {
+        total_credits?: number | string;
+        total_usage?: number | string;
+      };
+      total_credits?: number | string;
+      total_usage?: number | string;
+    };
+    const totalCreditsRaw = json.data?.total_credits ?? json.total_credits ?? null;
+    const totalUsageRaw = json.data?.total_usage ?? json.total_usage ?? null;
+    const totalCredits = totalCreditsRaw == null ? null : Number(totalCreditsRaw);
+    const totalUsage = totalUsageRaw == null ? null : Number(totalUsageRaw);
+    const safeCredits = Number.isFinite(totalCredits) ? totalCredits : null;
+    const safeUsage = Number.isFinite(totalUsage) ? totalUsage : null;
+    return {
+      totalCredits: safeCredits,
+      totalUsage: safeUsage,
+      remainingCredits:
+        safeCredits != null && safeUsage != null ? Math.max(safeCredits - safeUsage, 0) : null,
+      raw: json,
+    };
   }
 
   async addChannel(userId: string, dto: AddChannelDto): Promise<UserbotChannelDto> {

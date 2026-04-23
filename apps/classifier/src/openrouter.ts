@@ -96,6 +96,27 @@ export class OpenRouterClient {
     }
     throw lastError ?? new Error('OpenRouter request failed');
   }
+
+  async fetchGenerationCostUsd(generationId: string): Promise<number | null> {
+    const response = await fetch(`https://openrouter.ai/api/v1/generation/${encodeURIComponent(generationId)}`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${this.opts.apiKey}`,
+      },
+    });
+    if (!response.ok) {
+      const text = await safeText(response);
+      throw new Error(`OpenRouter generation ${response.status}: ${text.slice(0, 500)}`);
+    }
+    const json = (await response.json()) as {
+      data?: { total_cost?: number | string | null };
+      total_cost?: number | string | null;
+    };
+    const raw = json.data?.total_cost ?? json.total_cost ?? null;
+    if (raw == null) return null;
+    const parsed = typeof raw === 'number' ? raw : Number(raw);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
 }
 
 async function safeText(response: Response): Promise<string> {

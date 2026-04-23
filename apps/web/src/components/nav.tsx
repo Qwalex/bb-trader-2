@@ -31,6 +31,9 @@ export async function TopNav() {
           <Link href="/">Dashboard</Link>
           <Link href="/cabinets">Кабинеты</Link>
           <Link href="/userbot">Userbot</Link>
+          {me.role === 'admin' && <Link href="/filters">Filters</Link>}
+          <Link href="/openrouter-spend">OpenRouter</Link>
+          <Link href="/settings">Settings</Link>
           <Link href="/trades">Trades</Link>
           {me.role === 'admin' && <Link href="/admin">Admin</Link>}
           <span className="spacer" />

@@ -10,15 +10,22 @@ import type { Classification } from '@repo/shared-ts';
 import type { PrismaClient } from '@repo/shared-prisma';
 
 export interface ClassifyInput {
+  userId: string;
+  chatId: string;
   text: string | null;
   /** Есть ли у сообщения reply — важно для паттернов с requiresQuote. */
   hasReply: boolean;
 }
 
 export interface ClassifyResult {
-  classification: Classification;
+  /**
+   * null = локальные фильтры не сработали -> нужно идти в AI parsing path.
+   * ignore/close/result/reentry/signal = явное локальное решение.
+   */
+  classification: Classification | null;
   matchedPatternId: string | null;
   matchedGroup: string | null;
+  matchedBy: 'pattern' | 'example' | null;
 }
 
 const KIND_PRIORITY: Record<string, number> = {
@@ -34,10 +41,22 @@ export async function classifyByPatterns(
   input: ClassifyInput,
 ): Promise<ClassifyResult> {
   if (!input.text || !input.text.trim()) {
-    return { classification: 'ignore', matchedPatternId: null, matchedGroup: null };
+    return {
+      classification: 'ignore',
+      matchedPatternId: null,
+      matchedGroup: null,
+      matchedBy: null,
+    };
   }
 
-  const [patterns, examples] = await Promise.all([
+  const channel = await prisma.userbotChannel.findFirst({
+    where: { userId: input.userId, chatId: input.chatId },
+    select: { title: true },
+  });
+  const targetGroups = new Set<string>([input.chatId.trim().toLowerCase()]);
+  if (channel?.title?.trim()) targetGroups.add(channel.title.trim().toLowerCase());
+
+  const [patternsRaw, examplesRaw] = await Promise.all([
     prisma.tgUserbotFilterPattern.findMany({
       where: { enabled: true },
       select: {
@@ -58,12 +77,10 @@ export async function classifyByPatterns(
       },
     }),
   ]);
+  const patterns = patternsRaw.filter((p) => targetGroups.has(p.groupName.trim().toLowerCase()));
+  const examples = examplesRaw.filter((ex) => targetGroups.has(ex.groupName.trim().toLowerCase()));
 
-  let best: ClassifyResult = {
-    classification: 'ignore',
-    matchedPatternId: null,
-    matchedGroup: null,
-  };
+  let best: ClassifyResult | null = null;
   let bestPriority = -1;
 
   for (const p of patterns) {
@@ -80,26 +97,42 @@ export async function classifyByPatterns(
     const priority = KIND_PRIORITY[kind] ?? -1;
     if (priority > bestPriority) {
       bestPriority = priority;
-      best = { classification: kind, matchedPatternId: p.id, matchedGroup: p.groupName };
+      best = {
+        classification: kind,
+        matchedPatternId: p.id,
+        matchedGroup: p.groupName,
+        matchedBy: 'pattern',
+      };
     }
   }
 
-  // Fallback: weak fuzzy match by examples.
+  // Fallback: weak fuzzy match by examples (legacy behavior).
   if (bestPriority < 0) {
     for (const ex of examples) {
       if (ex.requiresQuote && !input.hasReply) continue;
       const score = overlapScore(input.text, ex.example);
-      if (score < 0.55) continue;
+      if (score < 0.34) continue;
       const kind = ex.kind as Classification;
       const priority = KIND_PRIORITY[kind] ?? -1;
       if (priority > bestPriority) {
         bestPriority = priority;
-        best = { classification: kind, matchedPatternId: null, matchedGroup: ex.groupName };
+        best = {
+          classification: kind,
+          matchedPatternId: null,
+          matchedGroup: ex.groupName,
+          matchedBy: 'example',
+        };
       }
     }
   }
 
-  return best;
+  if (best) return best;
+  return {
+    classification: null,
+    matchedPatternId: null,
+    matchedGroup: null,
+    matchedBy: null,
+  };
 }
 
 function overlapScore(input: string, example: string): number {

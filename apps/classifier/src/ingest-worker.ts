@@ -79,6 +79,7 @@ export class IngestWorker {
     for (const row of claimed) {
       await this.processOne(row);
     }
+    await this.resolvePendingOpenrouterCosts();
 
     return claimed.length;
   }
@@ -118,15 +119,35 @@ export class IngestWorker {
       return;
     }
 
-    const classification = await classifyByPatterns(prisma, { text, hasReply });
+    const classification = await classifyByPatterns(prisma, {
+      userId: row.userId,
+      chatId: row.chatId,
+      text,
+      hasReply,
+    });
 
-    if (classification.classification !== 'signal') {
+    // Explicit lifecycle/ignore match from local filters/examples.
+    if (
+      classification.classification != null &&
+      classification.classification !== 'signal'
+    ) {
       await this.handleLifecycleEvent(row, classification.classification);
       return;
     }
 
     try {
       const extracted = await extractSignal(openrouter, this.buildExtractorInput(text, row.rawJson));
+      const generationId =
+        extracted.kind === 'signal' ? extracted.data.generationId : extracted.generationId;
+      await this.recordOpenrouterCost({
+        generationId,
+        operation: 'signal_extract',
+        ingestId: row.id,
+        userId: row.userId,
+        cabinetId: row.cabinetId,
+        chatId: row.chatId,
+        sourceType: row.sourceType,
+      });
       if (extracted.kind === 'not_signal') {
         await prisma.ingestEvent.update({
           where: { id: row.id },
@@ -317,6 +338,128 @@ export class IngestWorker {
       return `${text}\n\n[message_metadata mediaKind=${raw.mediaKind}]`;
     } catch {
       return text;
+    }
+  }
+
+  private async recordOpenrouterCost(input: {
+    generationId: string | null;
+    operation: string;
+    ingestId: string;
+    userId: string;
+    cabinetId: string | null;
+    chatId: string;
+    sourceType: string;
+  }): Promise<void> {
+    const { prisma, openrouter, logger } = this.opts;
+    if (!input.generationId) return;
+    try {
+      const costUsd = await openrouter.fetchGenerationCostUsd(input.generationId);
+      await prisma.openrouterGenerationCost.upsert({
+        where: { generationId: input.generationId },
+        create: {
+          generationId: input.generationId,
+          operation: input.operation,
+          chatId: input.chatId,
+          source: input.sourceType,
+          ingestId: input.ingestId,
+          userId: input.userId,
+          cabinetId: input.cabinetId,
+          costUsd,
+          status: costUsd == null ? 'pending' : 'resolved',
+          attempts: 1,
+          lastError: costUsd == null ? 'cost_missing' : null,
+        },
+        update: {
+          operation: input.operation,
+          chatId: input.chatId,
+          source: input.sourceType,
+          ingestId: input.ingestId,
+          userId: input.userId,
+          cabinetId: input.cabinetId,
+          costUsd,
+          status: costUsd == null ? 'pending' : 'resolved',
+          attempts: { increment: 1 },
+          lastError: costUsd == null ? 'cost_missing' : null,
+          nextRetryAt: costUsd == null ? new Date(Date.now() + 60_000) : null,
+        },
+      });
+    } catch (error) {
+      await prisma.openrouterGenerationCost.upsert({
+        where: { generationId: input.generationId },
+        create: {
+          generationId: input.generationId,
+          operation: input.operation,
+          chatId: input.chatId,
+          source: input.sourceType,
+          ingestId: input.ingestId,
+          userId: input.userId,
+          cabinetId: input.cabinetId,
+          status: 'pending',
+          attempts: 1,
+          lastError: errorMessage(error).slice(0, 1000),
+          nextRetryAt: new Date(Date.now() + 60_000),
+        },
+        update: {
+          operation: input.operation,
+          chatId: input.chatId,
+          source: input.sourceType,
+          ingestId: input.ingestId,
+          userId: input.userId,
+          cabinetId: input.cabinetId,
+          status: 'pending',
+          attempts: { increment: 1 },
+          lastError: errorMessage(error).slice(0, 1000),
+          nextRetryAt: new Date(Date.now() + 60_000),
+        },
+      });
+      logger.warn(
+        { generationId: input.generationId, error: errorMessage(error) },
+        'classifier.openrouter.cost_pending',
+      );
+    }
+  }
+
+  private async resolvePendingOpenrouterCosts(limit = 20): Promise<void> {
+    const { prisma, openrouter, logger } = this.opts;
+    const now = new Date();
+    const rows = await prisma.openrouterGenerationCost.findMany({
+      where: {
+        status: 'pending',
+        OR: [{ nextRetryAt: null }, { nextRetryAt: { lte: now } }],
+      },
+      orderBy: { createdAt: 'asc' },
+      take: limit,
+    });
+    for (const row of rows) {
+      try {
+        const costUsd = await openrouter.fetchGenerationCostUsd(row.generationId);
+        await prisma.openrouterGenerationCost.update({
+          where: { id: row.id },
+          data: {
+            costUsd,
+            status: costUsd == null ? 'pending' : 'resolved',
+            attempts: { increment: 1 },
+            nextRetryAt: costUsd == null ? new Date(Date.now() + 60_000) : null,
+            lastError: costUsd == null ? 'cost_missing' : null,
+          },
+        });
+      } catch (error) {
+        const attempts = row.attempts + 1;
+        const nextRetryAt = new Date(Date.now() + Math.min(60 * 60_000, attempts * 30_000));
+        await prisma.openrouterGenerationCost.update({
+          where: { id: row.id },
+          data: {
+            status: attempts >= 15 ? 'failed' : 'pending',
+            attempts,
+            nextRetryAt: attempts >= 15 ? null : nextRetryAt,
+            lastError: errorMessage(error).slice(0, 1000),
+          },
+        });
+        logger.warn(
+          { generationId: row.generationId, attempts, error: errorMessage(error) },
+          'classifier.openrouter.cost_retry_failed',
+        );
+      }
     }
   }
 }

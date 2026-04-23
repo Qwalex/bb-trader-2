@@ -49,12 +49,29 @@ export const UserbotRecentEventDto = z.object({
   chatTitle: z.string().nullable(),
   messageId: z.string(),
   text: z.string().nullable(),
+  sourceType: z.string(),
   status: z.string(),
   classification: z.string().nullable(),
+  classifyError: z.string().nullable(),
   createdAt: z.string(),
   draftStatus: z.string().nullable(),
+  aiRequest: z.string().nullable(),
+  aiResponse: z.string().nullable(),
 });
 export type UserbotRecentEventDto = z.infer<typeof UserbotRecentEventDto>;
+
+export const UserbotTraceDto = z.object({
+  ingestId: z.string(),
+  chatId: z.string(),
+  messageId: z.string(),
+  classification: z.string().nullable(),
+  status: z.string(),
+  classifyError: z.string().nullable(),
+  aiRequest: z.string().nullable(),
+  aiResponse: z.string().nullable(),
+  createdAt: z.string(),
+});
+export type UserbotTraceDto = z.infer<typeof UserbotTraceDto>;
 
 export const AddChannelDto = z.object({
   chatId: z.string().min(1),
@@ -73,3 +90,18 @@ export const UserbotRecentEventsQueryDto = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(40),
 });
 export type UserbotRecentEventsQueryDto = z.infer<typeof UserbotRecentEventsQueryDto>;
+
+export const UserbotScanTodayDto = z.object({
+  limitPerChat: z.coerce.number().int().min(1).max(1000).default(200),
+});
+export type UserbotScanTodayDto = z.infer<typeof UserbotScanTodayDto>;
+
+export const UserbotRereadAllDto = z.object({
+  limit: z.coerce.number().int().min(1).max(5000).default(1000),
+});
+export type UserbotRereadAllDto = z.infer<typeof UserbotRereadAllDto>;
+
+export const UserbotOpenrouterSpendQueryDto = z.object({
+  days: z.coerce.number().int().min(1).max(365).default(30),
+});
+export type UserbotOpenrouterSpendQueryDto = z.infer<typeof UserbotOpenrouterSpendQueryDto>;

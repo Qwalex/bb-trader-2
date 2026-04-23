@@ -5,6 +5,7 @@ import { CabinetBotModule } from './cabinet-bot/cabinet-bot.module.js';
 import { CabinetsModule } from './cabinets/cabinets.module.js';
 import { ConfigModule } from './config.module.js';
 import { DashboardModule } from './dashboard/dashboard.module.js';
+import { FiltersModule } from './filters/filters.module.js';
 import { HealthModule } from './health/health.module.js';
 import { PrismaModule } from './prisma.module.js';
 import { TradesModule } from './trades/trades.module.js';
@@ -22,6 +23,7 @@ import { WatchdogModule } from './watchdog/watchdog.module.js';
     WatchdogModule,
     CabinetsModule,
     UserbotModule,
+    FiltersModule,
     DashboardModule,
     TradesModule,
   ],

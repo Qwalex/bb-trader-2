@@ -43,6 +43,12 @@ interface SourceStat {
   pnl: number;
 }
 
+interface OpenrouterSpend {
+  days: number;
+  totalUsd: number;
+  generations: number;
+}
+
 export default async function HomePage() {
   try {
     await apiFetch('/auth/me');
@@ -63,6 +69,11 @@ export default async function HomePage() {
   const sourceStats = summary.activeCabinetId
     ? await apiFetch<SourceStat[]>('/dashboard/source-stats')
     : [];
+  const openrouterSpend = await apiFetch<OpenrouterSpend>('/userbot/openrouter/spend?days=7').catch(() => ({
+    days: 7,
+    totalUsd: 0,
+    generations: 0,
+  }));
 
   return (
     <>
@@ -110,6 +121,13 @@ export default async function HomePage() {
               <div className="card">
                 <h2>Total PnL</h2>
                 <div style={{ fontSize: 24 }}>{summary.pnlTotal.toFixed(2)}</div>
+              </div>
+              <div className="card">
+                <h2>OpenRouter (7d)</h2>
+                <div style={{ fontSize: 24 }}>${openrouterSpend.totalUsd.toFixed(4)}</div>
+                <small style={{ color: 'var(--fg-dim)' }}>
+                  {openrouterSpend.generations} generations · <a href="/openrouter-spend">details</a>
+                </small>
               </div>
             </div>
 

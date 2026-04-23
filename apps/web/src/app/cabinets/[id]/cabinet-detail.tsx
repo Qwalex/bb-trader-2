@@ -46,11 +46,13 @@ interface CabinetBot {
 }
 
 const KNOWN_SETTINGS: Array<{ key: string; description: string; placeholder?: string }> = [
-  { key: 'ENTRY_USD', description: 'Размер входа по умолчанию, USD', placeholder: '10' },
+  { key: 'DEFAULT_ORDER_USD', description: 'Размер входа по умолчанию, USD', placeholder: '10' },
   { key: 'DEFAULT_LEVERAGE', description: 'Плечо по умолчанию', placeholder: '10' },
-  { key: 'MAX_LEVERAGE', description: 'Максимально допустимое плечо', placeholder: '20' },
-  { key: 'TP_STRATEGY', description: 'TP-стратегия (closest/furthest/progressive)' },
-  { key: 'SL_STRATEGY', description: 'SL-стратегия' },
+  { key: 'FORCED_LEVERAGE', description: 'Принудительное плечо (опционально)', placeholder: '20' },
+  { key: 'BUMP_TO_MIN_EXCHANGE_LOT', description: 'Поднимать объём до min lot (true/false)' },
+  { key: 'ENTRY_FILL_STRATEGY', description: 'Стратегия входа: market/limit' },
+  { key: 'TP_SL_STEP_POLICY', description: 'Политика TP/SL для пошагового закрытия' },
+  { key: 'DCA_ENABLED', description: 'Разрешить DCA (true/false)' },
 ];
 
 export function CabinetDetail({

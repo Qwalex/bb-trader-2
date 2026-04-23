@@ -31,6 +31,9 @@ export interface ExtractResult {
   signalHash: string;
   aiRequest: string;
   aiResponse: string;
+  generationId: string | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
 }
 
 const SYSTEM_PROMPT = `Ты — парсер торговых сигналов с криптовалютных Telegram-каналов.
@@ -48,7 +51,16 @@ const SYSTEM_PROMPT = `Ты — парсер торговых сигналов �
 export async function extractSignal(
   openrouter: OpenRouterClient,
   message: string,
-): Promise<{ kind: 'signal'; data: ExtractResult } | { kind: 'not_signal'; reason: string }> {
+): Promise<
+  | { kind: 'signal'; data: ExtractResult }
+  | {
+      kind: 'not_signal';
+      reason: string;
+      generationId: string | null;
+      inputTokens: number | null;
+      outputTokens: number | null;
+    }
+> {
   const result = await openrouter.chat(
     [
       { role: 'system', content: SYSTEM_PROMPT },
@@ -62,13 +74,25 @@ export async function extractSignal(
   try {
     parsedRaw = JSON.parse(jsonText);
   } catch {
-    return { kind: 'not_signal', reason: 'OpenRouter returned non-JSON content' };
+    return {
+      kind: 'not_signal',
+      reason: 'OpenRouter returned non-JSON content',
+      generationId: result.generationId,
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
+    };
   }
 
   if (typeof parsedRaw === 'object' && parsedRaw !== null) {
     const obj = parsedRaw as Record<string, unknown>;
     if (obj.not_signal === true || obj.notSignal === true) {
-      return { kind: 'not_signal', reason: 'LLM declared not a signal' };
+      return {
+        kind: 'not_signal',
+        reason: 'LLM declared not a signal',
+        generationId: result.generationId,
+        inputTokens: result.inputTokens,
+        outputTokens: result.outputTokens,
+      };
     }
   }
 
@@ -77,6 +101,9 @@ export async function extractSignal(
     return {
       kind: 'not_signal',
       reason: `schema mismatch: ${validated.error.issues.map((i) => i.path.join('.')).join(',')}`,
+      generationId: result.generationId,
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
     };
   }
 
@@ -87,6 +114,9 @@ export async function extractSignal(
       signalHash: hashSignal(validated.data),
       aiRequest: message,
       aiResponse: result.content,
+      generationId: result.generationId,
+      inputTokens: result.inputTokens,
+      outputTokens: result.outputTokens,
     },
   };
 }

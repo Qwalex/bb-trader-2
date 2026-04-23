@@ -47,10 +47,26 @@ interface RecentEvent {
   chatTitle: string | null;
   messageId: string;
   text: string | null;
+  sourceType: string;
   status: string;
   classification: string | null;
+  classifyError: string | null;
   createdAt: string;
   draftStatus: string | null;
+  aiRequest: string | null;
+  aiResponse: string | null;
+}
+
+interface TracePayload {
+  ingestId: string;
+  chatId: string;
+  messageId: string;
+  classification: string | null;
+  status: string;
+  classifyError: string | null;
+  aiRequest: string | null;
+  aiResponse: string | null;
+  createdAt: string;
 }
 
 interface ActiveCabinetFilter {
@@ -130,6 +146,7 @@ export function UserbotPanel({
   const [twoFaPassword, setTwoFaPassword] = useState('');
   const [msg, setMsg] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
+  const [trace, setTrace] = useState<TracePayload | null>(null);
 
   const filterByChannelId = useMemo(
     () => new Map(activeCabinetFilters.map((f) => [f.userbotChannelId, f])),
@@ -355,6 +372,73 @@ export function UserbotPanel({
     setMsg(`Синхронизация завершена.${importedText}`);
   }
 
+  async function onScanToday() {
+    setBusyKey('scan-today');
+    setMsg(null);
+    try {
+      const res = await fetch('/api/proxy/userbot/scan-today', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ limitPerChat: 200 }),
+      });
+      if (!res.ok) {
+        setMsg(`Ошибка scan-today: ${await res.text()}`);
+        return;
+      }
+      const data = (await res.json()) as { total: number; processed: number };
+      await refetchAll();
+      setMsg(`scan-today: queued ${data.processed} из ${data.total}`);
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  async function onRereadAll() {
+    setBusyKey('reread-all');
+    setMsg(null);
+    try {
+      const res = await fetch('/api/proxy/userbot/reread-all', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ limit: 1000 }),
+      });
+      if (!res.ok) {
+        setMsg(`Ошибка reread-all: ${await res.text()}`);
+        return;
+      }
+      const data = (await res.json()) as { total: number; processed: number };
+      await refetchAll();
+      setMsg(`reread-all: queued ${data.processed} из ${data.total}`);
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  async function onRereadOne(ingestId: string) {
+    setBusyKey(`reread:${ingestId}`);
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/proxy/userbot/reread/${ingestId}`, { method: 'POST' });
+      if (!res.ok) {
+        setMsg(`Ошибка reread: ${await res.text()}`);
+        return;
+      }
+      await refetchAll();
+      setMsg(`Сообщение ${ingestId} поставлено на повторную обработку.`);
+    } finally {
+      setBusyKey(null);
+    }
+  }
+
+  async function onOpenTrace(ingestId: string) {
+    const res = await fetch(`/api/proxy/userbot/trace/${ingestId}`, { cache: 'no-store' });
+    if (!res.ok) {
+      setMsg(`Ошибка trace: ${await res.text()}`);
+      return;
+    }
+    setTrace((await res.json()) as TracePayload);
+  }
+
   async function onAddChannel(e: React.FormEvent) {
     e.preventDefault();
     setMsg(null);
@@ -536,6 +620,12 @@ export function UserbotPanel({
               Разлогинить
             </button>
           )}
+          <button className="ghost" disabled={busyKey === 'scan-today'} onClick={() => void onScanToday()}>
+            {busyKey === 'scan-today' ? 'scan…' : 'Сканировать сегодня'}
+          </button>
+          <button className="ghost" disabled={busyKey === 'reread-all'} onClick={() => void onRereadAll()}>
+            {busyKey === 'reread-all' ? 'reread…' : 'Перечитать все'}
+          </button>
         </div>
 
         {session.status === 'awaiting_2fa' && (
@@ -812,6 +902,19 @@ export function UserbotPanel({
                         <span className="badge">ingest: {event.status}</span>
                         <span className="badge">{event.classification ?? 'classification:none'}</span>
                         <span className="badge">{event.draftStatus ?? 'draft:none'}</span>
+                        {event.classifyError && (
+                          <span className="badge err">{cutText(event.classifyError, 80)}</span>
+                        )}
+                        <button
+                          className="ghost"
+                          disabled={busyKey === `reread:${event.id}`}
+                          onClick={() => void onRereadOne(event.id)}
+                        >
+                          reread
+                        </button>
+                        <button className="ghost" onClick={() => void onOpenTrace(event.id)}>
+                          trace
+                        </button>
                       </div>
                     </div>
                   ))}
@@ -837,12 +940,72 @@ export function UserbotPanel({
                   <span className="badge">ingest: {event.status}</span>
                   <span className="badge">{event.classification ?? 'classification:none'}</span>
                   <span className="badge">{event.draftStatus ?? 'draft:none'}</span>
+                  {event.classifyError && (
+                    <span className="badge err">{cutText(event.classifyError, 80)}</span>
+                  )}
+                  <button
+                    className="ghost"
+                    disabled={busyKey === `reread:${event.id}`}
+                    onClick={() => void onRereadOne(event.id)}
+                  >
+                    reread
+                  </button>
+                  <button className="ghost" onClick={() => void onOpenTrace(event.id)}>
+                    trace
+                  </button>
                 </div>
               </div>
             ))}
           </div>
         )}
       </div>
+
+      {trace && (
+        <div
+          role="presentation"
+          onClick={() => setTrace(null)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0,0,0,0.6)',
+            zIndex: 50,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '1rem',
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Classifier trace"
+            onClick={(e) => e.stopPropagation()}
+            className="card"
+            style={{ width: 'min(1000px, 100%)', maxHeight: '85vh', overflowY: 'auto', marginBottom: 0 }}
+          >
+            <div className="row" style={{ justifyContent: 'space-between' }}>
+              <h2 style={{ margin: 0, color: 'var(--fg)' }}>
+                Trace: {trace.chatId} / {trace.messageId}
+              </h2>
+              <button className="ghost" onClick={() => setTrace(null)}>
+                Закрыть
+              </button>
+            </div>
+            <p style={{ color: 'var(--fg-dim)' }}>
+              ingest={trace.status} · classification={trace.classification ?? 'none'}
+              {trace.classifyError ? ` · error=${trace.classifyError}` : ''}
+            </p>
+            <h3>AI request</h3>
+            <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+              {trace.aiRequest ?? '—'}
+            </pre>
+            <h3>AI response</h3>
+            <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+              {trace.aiResponse ?? '—'}
+            </pre>
+          </div>
+        </div>
+      )}
 
       <div className="card">
         <h2>Cabinet coverage</h2>

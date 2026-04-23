@@ -5,6 +5,7 @@ const Env = z.object({
   APP_ENCRYPTION_KEY: z.string().min(1),
   SESSION_SECRET: z.string().min(16),
   TELEGRAM_BOT_TOKEN: z.string().min(1),
+  OPENROUTER_API_KEY: z.string().optional(),
   INITIAL_ADMIN_TELEGRAM_ID: z.string().optional(),
   API_CORS_ORIGINS: z
     .string()

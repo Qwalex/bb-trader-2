@@ -15,7 +15,10 @@ import {
 import { z } from 'zod';
 import {
   AddChannelDto,
+  UserbotOpenrouterSpendQueryDto,
+  UserbotRereadAllDto,
   UserbotRecentEventsQueryDto,
+  UserbotScanTodayDto,
   UpdateChannelDto,
   USERBOT_COMMAND_TYPES,
 } from '@repo/shared-ts';
@@ -81,6 +84,48 @@ export class UserbotController {
     const parsed = UserbotRecentEventsQueryDto.safeParse(query);
     if (!parsed.success) throw new BadRequestException(parsed.error.issues);
     return this.userbot.listRecentEvents(req.authUserId!, parsed.data.limit);
+  }
+
+  @Get('trace/:ingestId')
+  async getTrace(@Req() req: RequestWithUser, @Param('ingestId') ingestId: string) {
+    const trace = await this.userbot.getTrace(req.authUserId!, ingestId);
+    if (!trace) throw new NotFoundException('trace not found');
+    return trace;
+  }
+
+  @Post('scan-today')
+  scanToday(@Req() req: RequestWithUser, @Body() body: unknown) {
+    const parsed = UserbotScanTodayDto.safeParse(body);
+    if (!parsed.success) throw new BadRequestException(parsed.error.issues);
+    return this.userbot.scanToday(req.authUserId!, parsed.data.limitPerChat);
+  }
+
+  @Post('reread-all')
+  rereadAll(@Req() req: RequestWithUser, @Body() body: unknown) {
+    const parsed = UserbotRereadAllDto.safeParse(body);
+    if (!parsed.success) throw new BadRequestException(parsed.error.issues);
+    return this.userbot.rereadAll(req.authUserId!, parsed.data.limit);
+  }
+
+  @Post('reread/:ingestId')
+  async rereadOne(@Req() req: RequestWithUser, @Param('ingestId') ingestId: string) {
+    try {
+      return await this.userbot.reread(req.authUserId!, ingestId);
+    } catch {
+      throw new NotFoundException('ingest not found');
+    }
+  }
+
+  @Get('openrouter/spend')
+  getOpenrouterSpend(@Req() req: RequestWithUser, @Query() query: unknown) {
+    const parsed = UserbotOpenrouterSpendQueryDto.safeParse(query);
+    if (!parsed.success) throw new BadRequestException(parsed.error.issues);
+    return this.userbot.getOpenrouterSpend(req.authUserId!, parsed.data.days);
+  }
+
+  @Get('openrouter/balance')
+  getOpenrouterBalance() {
+    return this.userbot.getOpenrouterBalance();
   }
 
   @Post('channels')
