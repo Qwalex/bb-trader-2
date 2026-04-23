@@ -89,59 +89,60 @@ export class IngestWorker {
 
   private async processOne(row: IngestRow): Promise<void> {
     const { prisma, logger, openrouter, queue } = this.opts;
-    const text = row.text ?? '';
-    const hasReply = Boolean(row.replyToText);
-    const mediaKind = extractMediaKind(row.rawJson);
+    try {
+      const text = row.text ?? '';
+      const hasReply = Boolean(row.replyToText);
+      const mediaKind = extractMediaKind(row.rawJson);
 
-    if (!text.trim() && mediaKind) {
-      await prisma.ingestEvent.update({
-        where: { id: row.id },
-        data: {
-          status: 'failed',
-          classification: 'ignore',
-          classifyError: `unsupported_media_without_text:${mediaKind}`,
-          classifiedAt: new Date(),
-        },
-      });
-      await prisma.appLog.create({
-        data: {
-          userId: row.userId,
-          cabinetId: row.cabinetId,
-          level: 'warn',
-          category: 'classifier',
-          service: 'classifier',
-          message: 'ingest skipped: media without text',
-          payload: JSON.stringify({
-            ingestId: row.id,
-            mediaKind,
-            chatId: row.chatId,
-            messageId: row.messageId,
-          }),
-        },
-      });
-      return;
-    }
+      if (!text.trim() && mediaKind) {
+        await prisma.ingestEvent.update({
+          where: { id: row.id },
+          data: {
+            status: 'failed',
+            classification: 'ignore',
+            classifyError: `unsupported_media_without_text:${mediaKind}`,
+            classifiedAt: new Date(),
+          },
+        });
+        await prisma.appLog.create({
+          data: {
+            userId: row.userId,
+            cabinetId: row.cabinetId,
+            level: 'warn',
+            category: 'classifier',
+            service: 'classifier',
+            message: 'ingest skipped: media without text',
+            payload: JSON.stringify({
+              ingestId: row.id,
+              mediaKind,
+              chatId: row.chatId,
+              messageId: row.messageId,
+            }),
+          },
+        });
+        return;
+      }
 
-    const classification = await classifyByPatterns(prisma, {
-      userId: row.userId,
-      chatId: row.chatId,
-      text,
-      hasReply,
-    });
+      const classification = await classifyByPatterns(prisma, {
+        userId: row.userId,
+        chatId: row.chatId,
+        text,
+        hasReply,
+      });
 
     // Explicit lifecycle/ignore match from local filters/examples.
-    if (
-      classification.classification != null &&
-      classification.classification !== 'signal'
-    ) {
-      await this.handleLifecycleEvent(row, classification.classification);
-      return;
-    }
+      if (
+        classification.classification != null &&
+        classification.classification !== 'signal'
+      ) {
+        await this.handleLifecycleEvent(row, classification.classification);
+        return;
+      }
 
-    try {
-      const extracted = await extractSignal(openrouter, this.buildExtractorInput(text, row.rawJson), {
-        fallbackModel: this.opts.fallbackModel,
-      });
+      try {
+        const extracted = await extractSignal(openrouter, this.buildExtractorInput(text, row.rawJson), {
+          fallbackModel: this.opts.fallbackModel,
+        });
       const generationId =
         extracted.kind === 'signal' ? extracted.data.generationId : extracted.generationId;
       await this.recordOpenrouterCost({
@@ -220,18 +221,30 @@ export class IngestWorker {
         });
       }
 
-      logger.info(
-        { ingestId: row.id, signalDraftId: draft.id, signalHash },
-        'classifier.signal_ready',
-      );
+        logger.info(
+          { ingestId: row.id, signalDraftId: draft.id, signalHash },
+          'classifier.signal_ready',
+        );
+      } catch (error) {
+        const message = errorMessage(error);
+        logger.error(
+          { ingestId: row.id, error: message },
+          'classifier.extract_failed',
+        );
+        await prisma.ingestEvent.update({
+          where: { id: row.id },
+          data: {
+            status: 'failed',
+            classifyError: message.slice(0, 2000),
+            classifiedAt: new Date(),
+          },
+        });
+      }
     } catch (error) {
       const message = errorMessage(error);
-      logger.error(
-        { ingestId: row.id, error: message },
-        'classifier.extract_failed',
-      );
-      await prisma.ingestEvent.update({
-        where: { id: row.id },
+      logger.error({ ingestId: row.id, error: message }, 'classifier.process_one_failed');
+      await prisma.ingestEvent.updateMany({
+        where: { id: row.id, status: 'classifying' },
         data: {
           status: 'failed',
           classifyError: message.slice(0, 2000),

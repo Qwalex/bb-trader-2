@@ -52,11 +52,18 @@ export class SignalFanoutService {
       logger.debug({ signalDraftId: draft.id }, 'trader.fanout.already_done');
       return;
     }
+    if (draft.userId !== input.userId) {
+      logger.warn(
+        { signalDraftId: draft.id, draftUserId: draft.userId, payloadUserId: input.userId },
+        'trader.fanout.user_mismatch_payload_ignored',
+      );
+    }
+    const ownerUserId = draft.userId;
 
     const targetCabinetId = draft.targetCabinetId ?? input.onlyCabinetId;
     const cabinets = await prisma.cabinet.findMany({
       where: {
-        ownerUserId: input.userId,
+        ownerUserId,
         enabled: true,
         ...(targetCabinetId ? { id: targetCabinetId } : {}),
       },
@@ -77,7 +84,7 @@ export class SignalFanoutService {
 
     if (cabinets.length === 0) {
       logger.info(
-        { signalDraftId: draft.id, userId: input.userId },
+        { signalDraftId: draft.id, userId: ownerUserId },
         'trader.fanout.no_cabinets',
       );
     }
@@ -92,6 +99,7 @@ export class SignalFanoutService {
         defaultLeverage: number | null;
         forcedLeverage: number | null;
         defaultEntryUsd: string | null;
+        minLotBump: boolean | null;
       }> = cabinet.channelFilters;
       const channelFilter = filters.find((f) => f.userbotChannel.chatId === draft.sourceChatId);
 
@@ -110,6 +118,12 @@ export class SignalFanoutService {
       const settingsByKey = new Map<string, string>(
         (cabinet.settings as Array<{ key: string; value: string }>).map((s) => [s.key, s.value]),
       );
+      const dcaEnabled = parseBooleanSetting(settingsByKey.get('DCA_ENABLED'), true);
+      const entryFillStrategy = (settingsByKey.get('ENTRY_FILL_STRATEGY') ?? 'limit').toLowerCase();
+      const tpSlStepPolicy = settingsByKey.get('TP_SL_STEP_POLICY') ?? null;
+      const globalDefaultLeverage = parseNumericNullable(settingsByKey.get('DEFAULT_LEVERAGE'));
+      const globalMinLotBump = parseBooleanSetting(settingsByKey.get('BUMP_TO_MIN_EXCHANGE_LOT'), true);
+      const minLotBump = channelFilter?.minLotBump ?? globalMinLotBump;
       const defaultOrderUsd = parseNumericSetting(
         settingsByKey.get('DEFAULT_ORDER_USD'),
         channelFilter?.defaultEntryUsd ?? null,
@@ -119,6 +133,7 @@ export class SignalFanoutService {
         settingsByKey.get('FORCED_LEVERAGE'),
         channelFilter?.forcedLeverage ?? null,
         channelFilter?.defaultLeverage ?? null,
+        globalDefaultLeverage,
       );
 
       try {
@@ -161,7 +176,7 @@ export class SignalFanoutService {
           : await prisma.signal.create({
               data: {
                 cabinetId: cabinet.id,
-                userId: input.userId,
+                userId: ownerUserId,
                 pair: draft.pair,
                 direction: draft.direction,
                 entries: draft.entries,
@@ -195,6 +210,10 @@ export class SignalFanoutService {
           takeProfits,
           leverage,
           orderUsd: defaultOrderUsd,
+          dcaEnabled,
+          entryFillStrategy,
+          tpSlStepPolicy,
+          minLotBump,
         });
 
         await prisma.$transaction([
@@ -210,7 +229,7 @@ export class SignalFanoutService {
 
         await this.publishMirrorMessages({
           cabinetId: cabinet.id,
-          userId: input.userId,
+          userId: ownerUserId,
           draftId: draft.id,
           sourceChatId: draft.sourceChatId,
           sourceMessageId: draft.sourceMessageId,
@@ -260,7 +279,7 @@ export class SignalFanoutService {
         const existingSignal = await prisma.signal.findFirst({
           where: {
             cabinetId: cabinet.id,
-            userId: input.userId,
+            userId: ownerUserId,
             sourceChatId: draft.sourceChatId,
             sourceMessageId: draft.sourceMessageId,
             deletedAt: null,
@@ -281,11 +300,16 @@ export class SignalFanoutService {
     await prisma.signalDraft.update({
       where: { id: draft.id },
       data: {
-        status: failedCount > 0 && executedCount === 0 ? 'rejected' : 'fanned_out',
-        rejectReason:
-          failedCount > 0 && executedCount === 0
-            ? `fanout failed for all cabinets; failed=${failedCount}, skipped=${skippedCount}`
-            : null,
+        status: executedCount > 0 ? 'fanned_out' : 'rejected',
+        rejectReason: executedCount > 0
+          ? null
+          : cabinets.length === 0
+            ? 'no_enabled_cabinets'
+            : failedCount > 0 && skippedCount === 0
+              ? `failed_all; failed=${failedCount}`
+              : failedCount === 0 && skippedCount > 0
+                ? `skipped_all; skipped=${skippedCount}`
+                : `failed_and_skipped; failed=${failedCount}; skipped=${skippedCount}`,
       },
     });
   }
@@ -514,6 +538,7 @@ function pickLeverage(
   globalForced: string | undefined,
   channelForced: number | null,
   channelDefault: number | null,
+  globalDefault: number | null,
 ): number {
   const toNum = (v: string | number | null | undefined): number | null => {
     if (v == null) return null;
@@ -524,9 +549,24 @@ function pickLeverage(
     toNum(channelForced) ??
     toNum(globalForced) ??
     toNum(channelDefault) ??
+    toNum(globalDefault) ??
     toNum(signalLeverage) ??
     10
   );
+}
+
+function parseNumericNullable(value: string | undefined): number | null {
+  if (!value) return null;
+  const parsed = Number(value.trim());
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function parseBooleanSetting(value: string | undefined, fallback: boolean): boolean {
+  if (value == null) return fallback;
+  const normalized = value.trim().toLowerCase();
+  if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
+  if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+  return fallback;
 }
 
 function errorMessage(error: unknown): string {

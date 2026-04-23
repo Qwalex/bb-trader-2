@@ -33,14 +33,26 @@ export default async function OpenrouterSpendPage() {
     if (err.status === 401) redirect('/login');
     throw e;
   }
-  const [spend, balance] = await Promise.all([
-    apiFetch<SpendResponse>('/userbot/openrouter/spend?days=30'),
-    apiFetch<BalanceResponse>('/userbot/openrouter/balance').catch(() => ({
-      totalCredits: null,
-      totalUsage: null,
-      remainingCredits: null,
-    })),
-  ]);
+  let spend: SpendResponse;
+  let balance: BalanceResponse = {
+    totalCredits: null,
+    totalUsage: null,
+    remainingCredits: null,
+  };
+  try {
+    [spend, balance] = await Promise.all([
+      apiFetch<SpendResponse>('/userbot/openrouter/spend?days=30'),
+      apiFetch<BalanceResponse>('/userbot/openrouter/balance').catch(() => ({
+        totalCredits: null,
+        totalUsage: null,
+        remainingCredits: null,
+      })),
+    ]);
+  } catch (e) {
+    const err = e as ApiError;
+    if (err.status === 401) redirect('/login');
+    spend = { days: 30, totalUsd: 0, generations: 0, bySource: [], timeline: [] };
+  }
 
   return (
     <>

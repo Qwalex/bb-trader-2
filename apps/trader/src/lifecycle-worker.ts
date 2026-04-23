@@ -7,6 +7,7 @@ interface LifecyclePayload {
   signalEventId: string;
   signalId: string;
   cabinetId: string;
+  userId: string;
   eventType: 'close' | 'reentry' | 'result';
 }
 
@@ -26,6 +27,7 @@ export async function handleLifecycleEvent(
     select: {
       id: true,
       cabinetId: true,
+      userId: true,
       pair: true,
       direction: true,
       status: true,
@@ -34,10 +36,29 @@ export async function handleLifecycleEvent(
   });
   if (!signal || signal.deletedAt) return;
   if (signal.cabinetId !== payload.cabinetId) return;
+  if (signal.userId !== payload.userId) {
+    logger.warn(
+      {
+        signalId: signal.id,
+        signalEventId: payload.signalEventId,
+        signalUserId: signal.userId,
+        payloadUserId: payload.userId,
+      },
+      'trader.lifecycle.user_mismatch_payload_ignored',
+    );
+    return;
+  }
 
   if (payload.eventType === 'close') {
     const client = await registry.getClient(payload.cabinetId);
-    await closeSignalOnExchange(prisma, client, signal.id, signal.pair, signal.direction);
+    const closeApplied = await closeSignalOnExchange(prisma, client, signal.id, signal.pair, signal.direction);
+    if (!closeApplied) {
+      logger.warn(
+        { signalId: signal.id, signalEventId: payload.signalEventId },
+        'trader.lifecycle.close_not_confirmed',
+      );
+      return;
+    }
     await prisma.signal.update({
       where: { id: signal.id },
       data: {
@@ -81,7 +102,7 @@ async function closeSignalOnExchange(
   signalId: string,
   symbol: string,
   direction: string,
-): Promise<void> {
+): Promise<boolean> {
   const openOrders = await prisma.order.findMany({
     where: {
       signalId,
@@ -93,18 +114,22 @@ async function closeSignalOnExchange(
   for (const order of openOrders) {
     if (!order.bybitOrderId) continue;
     try {
-      await client.cancelOrder({
+      const response = await client.cancelOrder({
         category: 'linear',
         symbol,
         orderId: order.bybitOrderId,
       });
+      if (Number(response.retCode ?? 0) === 0) {
+        await prisma.order.update({
+          where: { id: order.id },
+          data: { status: 'CANCELLED' },
+        });
+      } else {
+        return false;
+      }
     } catch {
-      // ignore best-effort cancellation.
+      return false;
     }
-    await prisma.order.update({
-      where: { id: order.id },
-      data: { status: 'CANCELLED' },
-    });
   }
 
   const expectedSide = direction === 'BUY' ? 'Buy' : 'Sell';
@@ -113,11 +138,11 @@ async function closeSignalOnExchange(
   const activePosition = positions.result?.list?.find(
     (position) => position.side === expectedSide && Number(position.size ?? 0) > 0,
   );
-  if (!activePosition) return;
+  if (!activePosition) return true;
   const size = Number(activePosition.size ?? 0);
-  if (!Number.isFinite(size) || size <= 0) return;
+  if (!Number.isFinite(size) || size <= 0) return true;
 
-  await client.submitOrder({
+  const closeResponse = await client.submitOrder({
     category: 'linear',
     symbol,
     side: closeSide,
@@ -125,4 +150,5 @@ async function closeSignalOnExchange(
     qty: String(size),
     reduceOnly: true,
   });
+  return Number(closeResponse.retCode ?? 0) === 0;
 }

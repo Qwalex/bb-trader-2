@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { CLASSIFICATIONS } from '@repo/shared-ts';
+import { CLASSIFICATIONS } from '@repo/shared-ts/enums';
 
 type FilterKind = 'signal' | 'close' | 'result' | 'reentry' | 'ignore';
 

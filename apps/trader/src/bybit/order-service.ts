@@ -25,6 +25,10 @@ export interface PlaceSignalOrdersInput {
   takeProfits: number[];
   leverage: number;
   orderUsd: number;
+  dcaEnabled?: boolean;
+  entryFillStrategy?: string;
+  tpSlStepPolicy?: string | null;
+  minLotBump?: boolean;
 }
 
 export class BybitOrderService {
@@ -102,25 +106,29 @@ export class BybitOrderService {
     const normalizedEntries = [...input.entries].sort((a, b) =>
       input.direction === 'BUY' ? b - a : a - b,
     );
-    const entryChunks = splitOrderUsd(input.orderUsd, normalizedEntries.length);
+    const targetEntries =
+      input.dcaEnabled === false ? normalizedEntries.slice(0, 1) : normalizedEntries;
+    const primaryOrderType = normalizeEntryFillStrategy(input.entryFillStrategy);
+    const entryChunks =
+      input.dcaEnabled === false ? [input.orderUsd] : splitOrderUsd(input.orderUsd, normalizedEntries.length);
     const placed: string[] = [];
-    for (let i = 0; i < normalizedEntries.length; i += 1) {
-      const entryPrice = normalizedEntries[i];
+    for (let i = 0; i < targetEntries.length; i += 1) {
+      const entryPrice = targetEntries[i];
       if (entryPrice == null) continue;
-      const orderUsd = entryChunks[i] ?? 0;
+      const orderUsd = entryChunks[i] ?? input.orderUsd;
       const rawQty = computeQtyFromUsd(orderUsd, entryPrice, input.leverage);
-      const qty = await this.normalizeQty(client, input.pair, rawQty);
+      const qty = await this.normalizeQty(client, input.pair, rawQty, input.minLotBump !== false);
       if (qty <= 0) {
         throw new Error(`qty normalized to zero for ${input.pair} at entry=${entryPrice}`);
       }
+      const orderType = i === 0 ? primaryOrderType : 'Limit';
       const response = await this.submitOrderWithRetry(client, {
         category: 'linear',
         symbol: input.pair,
         side,
-        orderType: 'Limit',
+        orderType,
         qty: qty.toString(),
-        price: entryPrice.toString(),
-        timeInForce: 'GTC',
+        ...(orderType === 'Limit' ? { price: entryPrice.toString(), timeInForce: 'GTC' } : {}),
         reduceOnly: false,
       });
       assertBybitOk(response, 'submitOrder(entry)');
@@ -148,15 +156,17 @@ export class BybitOrderService {
       client,
       input.pair,
       computeQtyFromUsd(input.orderUsd, avgEntry, input.leverage),
+      input.minLotBump !== false,
     );
     const tps = [...input.takeProfits].sort((a, b) => (input.direction === 'BUY' ? a - b : b - a));
-    const splitQty = splitQtyChunks(qty, Math.max(1, tps.length));
+    const effectiveTps = normalizeTpPolicy(input.tpSlStepPolicy, tps);
+    const splitQty = splitQtyChunks(qty, Math.max(1, effectiveTps.length));
     const placed: string[] = [];
-    for (let i = 0; i < tps.length; i += 1) {
-      const tp = tps[i];
+    for (let i = 0; i < effectiveTps.length; i += 1) {
+      const tp = effectiveTps[i];
       if (tp == null || !Number.isFinite(tp) || tp <= 0) continue;
       const tpQty = splitQty[i] ?? 0;
-      const normalizedTpQty = await this.normalizeQty(client, input.pair, tpQty);
+      const normalizedTpQty = await this.normalizeQty(client, input.pair, tpQty, input.minLotBump !== false);
       if (normalizedTpQty <= 0) continue;
       const response = await this.submitOrderWithRetry(client, {
         category: 'linear',
@@ -222,29 +232,41 @@ export class BybitOrderService {
   ): Promise<void> {
     for (const orderId of bybitOrderIds) {
       try {
-        await client.cancelOrder({
+        const response = await client.cancelOrder({
           category: 'linear',
           symbol,
           orderId,
         });
+        assertBybitOk(response, 'cancelOrder(rollback)');
+        await this.prisma.order.updateMany({
+          where: {
+            signalId,
+            bybitOrderId: orderId,
+          },
+          data: { status: 'CANCELLED' },
+        });
       } catch {
-        // Best effort rollback.
+        await this.prisma.order.updateMany({
+          where: {
+            signalId,
+            bybitOrderId: orderId,
+          },
+          data: { status: 'FAILED' },
+        });
       }
     }
-    await this.prisma.order.updateMany({
-      where: {
-        signalId,
-        bybitOrderId: { in: bybitOrderIds },
-      },
-      data: { status: 'CANCELLED' },
-    });
   }
 
-  private async normalizeQty(client: RestClientV5, symbol: string, rawQty: number): Promise<number> {
+  private async normalizeQty(
+    client: RestClientV5,
+    symbol: string,
+    rawQty: number,
+    bumpToMinLot: boolean,
+  ): Promise<number> {
     if (!Number.isFinite(rawQty) || rawQty <= 0) return 0;
     const rules = await this.getQtyRules(client, symbol);
     const stepped = Math.floor(rawQty / rules.qtyStep) * rules.qtyStep;
-    const normalized = Math.max(rules.minQty, stepped);
+    const normalized = bumpToMinLot ? Math.max(rules.minQty, stepped) : stepped;
     const rounded = Math.round(normalized * 1e8) / 1e8;
     return rounded >= rules.minQty ? rounded : 0;
   }
@@ -314,6 +336,19 @@ function splitQtyChunks(totalQty: number, chunks: number): number[] {
   const used = out.slice(0, -1).reduce((a, b) => a + b, 0);
   out[out.length - 1] = Math.max(0.001, totalQty - used);
   return out;
+}
+
+function normalizeEntryFillStrategy(raw: string | undefined): 'Limit' | 'Market' {
+  if (!raw) return 'Limit';
+  return raw.trim().toLowerCase() === 'market' ? 'Market' : 'Limit';
+}
+
+function normalizeTpPolicy(policy: string | null | undefined, tps: number[]): number[] {
+  const normalized = policy?.trim().toLowerCase() ?? '';
+  if (normalized === 'first_only' || normalized === 'single_tp') {
+    return tps.length > 0 ? [tps[0] as number] : [];
+  }
+  return tps;
 }
 
 function errorMessage(error: unknown): string {

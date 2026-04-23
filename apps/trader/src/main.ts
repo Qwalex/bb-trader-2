@@ -74,6 +74,7 @@ async function main(): Promise<void> {
           signalEventId: payload.signalEventId,
           signalId: payload.signalId,
           cabinetId: payload.cabinetId,
+          userId: payload.userId,
           eventType: payload.eventType,
         },
       );

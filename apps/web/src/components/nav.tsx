@@ -1,5 +1,7 @@
+'use client';
+
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { apiFetch } from '@/lib/api';
 import { LogoutButton } from './logout-button';
 
 interface Me {
@@ -11,13 +13,26 @@ interface Me {
   activeCabinetId: string | null;
 }
 
-export async function TopNav() {
-  let me: Me | null = null;
-  try {
-    me = await apiFetch<Me>('/auth/me');
-  } catch {
-    /* not logged in */
-  }
+export function TopNav() {
+  const [me, setMe] = useState<Me | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch('/api/proxy/auth/me', { cache: 'no-store' })
+      .then(async (res) => {
+        if (!res.ok) return null;
+        return (await res.json()) as Me;
+      })
+      .then((data) => {
+        if (!cancelled) setMe(data);
+      })
+      .catch(() => {
+        if (!cancelled) setMe(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const brand = process.env.NEXT_PUBLIC_BRAND_NAME || 'bb-trader';
 

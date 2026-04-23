@@ -28,18 +28,30 @@ interface FilterExample {
 }
 
 export default async function FiltersPage() {
+  let me: { role?: 'user' | 'admin' } | null = null;
   try {
-    await apiFetch('/auth/me');
+    me = await apiFetch<{ role: 'user' | 'admin' }>('/auth/me');
   } catch (e) {
     const err = e as ApiError;
     if (err.status === 401) redirect('/login');
     throw e;
   }
-  const [groups, patterns, examples] = await Promise.all([
-    apiFetch<string[]>('/filters/groups'),
-    apiFetch<FilterPattern[]>('/filters/patterns'),
-    apiFetch<FilterExample[]>('/filters/examples'),
-  ]);
+  if (me?.role !== 'admin') redirect('/');
+
+  let groups: string[] = [];
+  let patterns: FilterPattern[] = [];
+  let examples: FilterExample[] = [];
+  try {
+    [groups, patterns, examples] = await Promise.all([
+      apiFetch<string[]>('/filters/groups'),
+      apiFetch<FilterPattern[]>('/filters/patterns'),
+      apiFetch<FilterExample[]>('/filters/examples'),
+    ]);
+  } catch (e) {
+    const err = e as ApiError;
+    if (err.status === 401 || err.status === 403) redirect('/');
+    throw e;
+  }
   return (
     <>
       <TopNav />

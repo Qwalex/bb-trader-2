@@ -30,7 +30,14 @@ export default async function DiagnosticsPage() {
     throw e;
   }
   if (me.role !== 'admin') redirect('/');
-  const runs = await apiFetch<DiagnosticRun[]>('/admin/diagnostics/runs?limit=50');
+  let runs: DiagnosticRun[] = [];
+  try {
+    runs = await apiFetch<DiagnosticRun[]>('/admin/diagnostics/runs?limit=50');
+  } catch (e) {
+    const err = e as ApiError;
+    if (err.status === 401 || err.status === 403) redirect('/');
+    throw e;
+  }
   return (
     <>
       <TopNav />

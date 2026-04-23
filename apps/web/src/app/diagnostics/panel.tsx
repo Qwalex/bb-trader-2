@@ -37,18 +37,41 @@ interface DiagnosticDetail {
     status: string;
     summary: string | null;
   }>;
+  stepResults: Array<{
+    id: string;
+    caseId: string;
+    stepName: string;
+    status: string;
+    error: string | null;
+    payloadJson: string | null;
+    createdAt: string;
+  }>;
   logs: Array<{
     id: string;
     level: string;
     category: string;
     message: string;
+    payload: string | null;
     createdAt: string;
   }>;
+}
+
+interface PipelineSummary {
+  ingestCounts: Array<{ status: string; _count: { _all: number } }>;
+  commandCounts: Array<{ status: string; _count: { _all: number } }>;
+  recalcCounts: Array<{ status: string; _count: { _all: number } }>;
+  stuck: {
+    ingestClassifying: number;
+    userbotCommands: number;
+    recalcJobs: number;
+  };
+  checkedAt: string;
 }
 
 export function DiagnosticsPanel({ initialRuns }: { initialRuns: DiagnosticRun[] }) {
   const [runs, setRuns] = useState(initialRuns);
   const [detail, setDetail] = useState<DiagnosticDetail | null>(null);
+  const [pipeline, setPipeline] = useState<PipelineSummary | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
   async function refreshRuns() {
@@ -58,6 +81,15 @@ export function DiagnosticsPanel({ initialRuns }: { initialRuns: DiagnosticRun[]
       return;
     }
     setRuns((await res.json()) as DiagnosticRun[]);
+  }
+
+  async function refreshPipelineSummary() {
+    const res = await fetch('/api/proxy/admin/pipeline-summary', { cache: 'no-store' });
+    if (!res.ok) {
+      setMsg(`Pipeline summary error: ${await res.text()}`);
+      return;
+    }
+    setPipeline((await res.json()) as PipelineSummary);
   }
 
   async function openRun(runId: string) {
@@ -72,6 +104,35 @@ export function DiagnosticsPanel({ initialRuns }: { initialRuns: DiagnosticRun[]
   return (
     <>
       {msg && <div className="card">{msg}</div>}
+      <div className="card">
+        <div className="row" style={{ justifyContent: 'space-between' }}>
+          <h2 style={{ margin: 0 }}>Pipeline health</h2>
+          <button className="ghost" onClick={() => void refreshPipelineSummary()}>
+            Refresh
+          </button>
+        </div>
+        {!pipeline ? (
+          <p style={{ color: 'var(--fg-dim)' }}>Click refresh to load current queue health.</p>
+        ) : (
+          <>
+            <p style={{ color: 'var(--fg-dim)' }}>Checked: {new Date(pipeline.checkedAt).toLocaleString()}</p>
+            <div className="row">
+              <div className="card" style={{ flex: 1 }}>
+                <strong>Ingest stuck</strong>
+                <div>{pipeline.stuck.ingestClassifying}</div>
+              </div>
+              <div className="card" style={{ flex: 1 }}>
+                <strong>Userbot commands stuck</strong>
+                <div>{pipeline.stuck.userbotCommands}</div>
+              </div>
+              <div className="card" style={{ flex: 1 }}>
+                <strong>Recalc jobs stuck</strong>
+                <div>{pipeline.stuck.recalcJobs}</div>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
       <div className="card">
         <div className="row" style={{ justifyContent: 'space-between' }}>
           <h2 style={{ margin: 0 }}>Runs</h2>
@@ -162,6 +223,33 @@ export function DiagnosticsPanel({ initialRuns }: { initialRuns: DiagnosticRun[]
               ))}
             </tbody>
           </table>
+          <h3>Step results</h3>
+          {detail.stepResults.length === 0 ? (
+            <p style={{ color: 'var(--fg-dim)' }}>No step-level diagnostics.</p>
+          ) : (
+            <table>
+              <thead>
+                <tr>
+                  <th>At</th>
+                  <th>Case</th>
+                  <th>Step</th>
+                  <th>Status</th>
+                  <th>Error</th>
+                </tr>
+              </thead>
+              <tbody>
+                {detail.stepResults.map((row) => (
+                  <tr key={row.id}>
+                    <td>{new Date(row.createdAt).toLocaleString()}</td>
+                    <td>{row.caseId}</td>
+                    <td>{row.stepName}</td>
+                    <td>{row.status}</td>
+                    <td>{row.error ?? '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
           <h3>Logs</h3>
           <table>
             <thead>
@@ -170,6 +258,7 @@ export function DiagnosticsPanel({ initialRuns }: { initialRuns: DiagnosticRun[]
                 <th>Level</th>
                 <th>Category</th>
                 <th>Message</th>
+                <th>Payload</th>
               </tr>
             </thead>
             <tbody>
@@ -179,6 +268,7 @@ export function DiagnosticsPanel({ initialRuns }: { initialRuns: DiagnosticRun[]
                   <td>{row.level}</td>
                   <td>{row.category}</td>
                   <td>{row.message}</td>
+                  <td>{row.payload ? row.payload.slice(0, 180) : '—'}</td>
                 </tr>
               ))}
             </tbody>
