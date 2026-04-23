@@ -21,12 +21,21 @@ async function bootstrap(): Promise<void> {
     bufferLogs: true,
   });
 
+  app.setGlobalPrefix('api');
+
   await app.register(fastifyCors as unknown as Parameters<typeof app.register>[0], {
     origin: config.API_CORS_ORIGINS,
     credentials: true,
   });
   await app.register(fastifyCookie as unknown as Parameters<typeof app.register>[0], {
     secret: config.SESSION_SECRET,
+  });
+
+  // Root route handled directly on the Fastify instance (outside NestJS router)
+  // so it is reachable even though all NestJS routes are prefixed with /api.
+  const fastify = app.getHttpAdapter().getInstance();
+  fastify.get('/', (_req, reply) => {
+    void reply.redirect('/api/health', 302);
   });
 
   const shutdown = async (signal: string) => {
